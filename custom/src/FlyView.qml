@@ -81,12 +81,13 @@ Item {
 
     FlyViewToolBar {
         id:         toolbar
-        visible:    !QGroundControl.videoManager.fullScreen
+        visible:    false
+        height:     0
     }
 
     Item {
         id:                 mapHolder
-        anchors.top:        toolbar.bottom
+        anchors.top:        parent.top
         anchors.bottom:     parent.bottom
         anchors.left:       parent.left
         anchors.right:      parent.right
@@ -110,9 +111,9 @@ Item {
         PipView {
             id:                     _pipView
             anchors.left:           parent.left
-            anchors.leftMargin:     260 + _toolsMargin
+            anchors.leftMargin:     customOverlay._leftPanelWidth + _toolsMargin
             anchors.bottom:         parent.bottom
-            anchors.bottomMargin:   56 + _toolsMargin
+            anchors.bottomMargin:   customOverlay._bottomBarHeight + _toolsMargin
             item1IsFullSettingsKey: "MainFlyWindowIsMap"
             item1:                  mapControl
             item2:                  QGroundControl.videoManager.hasVideo ? videoControl : null
@@ -124,20 +125,6 @@ Item {
             property real bottomEdgeLeftInset: visible ? height + anchors.margins : 0
         }
 
-        FlyViewWidgetLayer {
-            id:                     widgetLayer
-            anchors.top:            parent.top
-            anchors.bottom:         parent.bottom
-            anchors.left:           parent.left
-            anchors.right:          guidedValueSlider.visible ? guidedValueSlider.left : parent.right
-            z:                      _fullItemZorder + 2 // we need to add one extra layer for map 3d viewer (normally was 1)
-            parentToolInsets:       customOverlay.totalToolInsets
-            mapControl:             _mapControl
-            visible:                !QGroundControl.videoManager.fullScreen
-            utmspActTrigger:        utmspSendActTrigger
-            isViewer3DOpen:         viewer3DWindow.isOpen
-        }
-
         FlyViewCustomLayer {
             id:                 customOverlay
             anchors.fill:       parent
@@ -145,6 +132,20 @@ Item {
             parentToolInsets:   _toolInsets
             mapControl:         _mapControl
             visible:            !QGroundControl.videoManager.fullScreen
+        }
+
+        FlyViewWidgetLayer {
+            id:                     widgetLayer
+            anchors.top:            parent.top
+            anchors.bottom:         parent.bottom
+            anchors.left:           parent.left
+            anchors.right:          guidedValueSlider.visible ? guidedValueSlider.left : parent.right
+            z:                      _fullItemZorder + 3
+            parentToolInsets:       customOverlay.totalToolInsets
+            mapControl:             _mapControl
+            visible:                !QGroundControl.videoManager.fullScreen
+            utmspActTrigger:        utmspSendActTrigger
+            isViewer3DOpen:         viewer3DWindow.isOpen
         }
 
         // Development tool for visualizing the insets for a paticular layer, show if needed
@@ -169,6 +170,7 @@ Item {
         GuidedValueSlider {
             id:                 guidedValueSlider
             anchors.right:      parent.right
+            anchors.rightMargin: customOverlay._rightPanelWidth
             anchors.top:        parent.top
             anchors.bottom:     parent.bottom
             z:                  QGroundControl.zOrderTopMost

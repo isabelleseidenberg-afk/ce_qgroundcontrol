@@ -76,13 +76,23 @@ Item {
         id:                     topRightPanel
         anchors.top:            parent.top
         anchors.right:          parent.right
-        anchors.topMargin:      _layoutMargin
-        anchors.rightMargin:    _layoutMargin
+        anchors.topMargin:      _layoutMargin + parentToolInsets.topEdgeRightInset
+        anchors.rightMargin:    _layoutMargin + parentToolInsets.rightEdgeTopInset
         maximumHeight:          parent.height - _margins * 5
 
         property real topEdgeRightInset:    height + _layoutMargin
         property real rightEdgeTopInset:    width + _layoutMargin
         property real rightEdgeCenterInset: rightEdgeTopInset
+    }
+
+    FlyViewTopRightColumnLayout {
+        id:                 topRightColumnLayout
+        anchors.top:        parent.top
+        anchors.right:      parent.right
+        anchors.topMargin:  _layoutMargin + parentToolInsets.topEdgeRightInset
+        anchors.rightMargin: _layoutMargin + parentToolInsets.rightEdgeCenterInset
+        spacing:            _layoutSpacing
+        visible:            !topRightPanel.visible
     }
 
     FlyViewMissionCompleteDialog {
@@ -153,7 +163,7 @@ Item {
         anchors.top:            parent.top
         z:                      QGroundControl.zOrderWidgets
         maxHeight:              parent.height - y - parentToolInsets.bottomEdgeLeftInset - _toolsMargin
-        visible:                false
+        visible:                !QGroundControl.videoManager.fullScreen
 
         onDisplayPreFlightChecklist: {
             if (!preFlightChecklistLoader.active) {
