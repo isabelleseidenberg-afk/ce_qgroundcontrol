@@ -127,11 +127,15 @@ Item {
         FlyViewWidgetLayer {
             id:                     widgetLayer
             anchors.top:            parent.top
+            anchors.topMargin:      44
             anchors.bottom:         parent.bottom
+            anchors.bottomMargin:   56
             anchors.left:           parent.left
+            anchors.leftMargin:     260
             anchors.right:          guidedValueSlider.visible ? guidedValueSlider.left : parent.right
+            anchors.rightMargin:    guidedValueSlider.visible ? 0 : 260
             z:                      _fullItemZorder + 2 // we need to add one extra layer for map 3d viewer (normally was 1)
-            parentToolInsets:       customOverlay.totalToolInsets
+            parentToolInsets:       _toolInsets
             mapControl:             _mapControl
             visible:                !QGroundControl.videoManager.fullScreen
             utmspActTrigger:        utmspSendActTrigger
@@ -140,9 +144,9 @@ Item {
 
         FlyViewCustomLayer {
             id:                 customOverlay
-            anchors.fill:       widgetLayer
+            anchors.fill:       parent
             z:                  _fullItemZorder + 2
-            parentToolInsets:   widgetLayer.totalToolInsets
+            parentToolInsets:   _toolInsets
             mapControl:         _mapControl
             visible:            !QGroundControl.videoManager.fullScreen
         }
