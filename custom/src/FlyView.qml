@@ -172,7 +172,9 @@ Item {
             anchors.right:      parent.right
             anchors.rightMargin: customOverlay._rightPanelWidth
             anchors.top:        parent.top
+            anchors.topMargin:  customOverlay._topBarHeight
             anchors.bottom:     parent.bottom
+            anchors.bottomMargin: customOverlay._bottomBarHeight
             z:                  QGroundControl.zOrderTopMost
             visible:            false
         }
