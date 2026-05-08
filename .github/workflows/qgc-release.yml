@@ -152,6 +152,7 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-22.04
     needs: [setup, build-appimage, build-dmg]
+    if: github.event_name != 'workflow_dispatch'
     permissions:
       contents: write
 
