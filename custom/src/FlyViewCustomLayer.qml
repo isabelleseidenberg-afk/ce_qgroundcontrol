@@ -17,6 +17,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtLocation
+import QtPositioning
 
 import QGroundControl
 import QGroundControl.Controls
@@ -33,6 +35,9 @@ Item {
     property var parentToolInsets
     property var totalToolInsets: _totalToolInsets
     property var mapControl
+    property var _rosBridgeClient: (QGroundControl.corePlugin && QGroundControl.corePlugin.rosBridgeClient)
+                                   ? QGroundControl.corePlugin.rosBridgeClient
+                                   : localRosBridgeClient
 
     // ─────────────────────────────────────────────────────────────────────
     // LAYOUT CONSTANTS
@@ -56,7 +61,7 @@ Item {
     // ─────────────────────────────────────────────────────────────────────
     readonly property string _clrPanel:       "#1a1c1f"  // main panel background
     readonly property string _clrCard:        "#2a2d32"  // card / control background
-    readonly property string _clrPurple:      "#6a0dad"  // demo / AI/ML accent
+    readonly property string _clrPurple:      "#6a0dad"  // demo accent
     readonly property string _clrPurpleDim:   "#4a006d"  // locked-demo shade
     readonly property string _clrBlue:        "#1565C0"  // badge accent
     readonly property string _clrGreen:       "#4CAF50"  // connected / active / continue
@@ -126,23 +131,61 @@ Item {
 
     readonly property bool _canArm: demoLocked
 
+    property int selectedRoundSpecIndex: 0
+    property string cameraMode: "survey"
+    property string bridgeSendStatus: "Bridge: no sends yet"
+    property var _arenaOverlay
+    property var _fobMarkers: []
+
+    readonly property var roundSpecOptions: [
+        {
+            label: "Outfield",
+            ceFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
+            wvxFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
+            geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
+        },
+        {
+            label: "Home Base",
+            ceFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
+            wvxFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
+            geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
+        }
+    ]
+    readonly property var _arenaPath: [
+        QtPositioning.coordinate(38.7507608625056, -77.49735908548331),
+        QtPositioning.coordinate(38.75094024382851, -77.49709285710168),
+        QtPositioning.coordinate(38.75073132744176, -77.49686508648041),
+        QtPositioning.coordinate(38.750551952470936, -77.49713235890398)
+    ]
+    
+
     CEVideoStatus {
         id: ceVideoStatus
     }
 
+    QGCRosBridgeClient {
+        id: localRosBridgeClient
+        host: "127.0.0.1"
+        port: 5010
+    }
+
+    Connections {
+        target: root._rosBridgeClient
+        onMessageSent: function(json) {
+            root.bridgeSendStatus = "Bridge sent " + new Date().toLocaleTimeString()
+            console.log("QGC ROS bridge sent:", json)
+        }
+        onSendFailed: function(reason) {
+            root.bridgeSendStatus = "Bridge send failed: " + reason
+            console.warn("QGC ROS bridge send failed:", reason)
+        }
+    }
+
     readonly property string _videoHealthState: ceVideoStatus.hasStatus ? ceVideoStatus.state : "NO_VIDEO"
-    readonly property bool _videoHealthOk: _videoHealthState === "OK"
-    readonly property bool _videoHealthWarn: _videoHealthState === "LOW_FPS"
-    readonly property bool _videoHealthBad: _videoHealthState === "STALE" || _videoHealthState === "NO_VIDEO"
-    readonly property string _videoStatusText: _videoHealthState === "OK" ? "Ok" :
-                                               _videoHealthState === "LOW_FPS" ? "Low FPS" :
-                                               _videoHealthState === "STALE" ? "Stale" :
-                                               "No Video"
-    readonly property string _videoStatusLabel: "Video: " + _videoStatusText
-    readonly property color _videoStatusColor: _videoHealthOk ? _clrGreen :
-                                               _videoHealthWarn ? _clrAmber :
-                                               _videoHealthBad ? _clrRed :
-                                               _clrCard
+    readonly property bool _videoLive: _videoHealthState === "OK"
+    readonly property bool _videoStale: _videoHealthState === "STALE"
+    readonly property string _videoStatusLabel: _videoLive ? "Video: Live" : (_videoStale ? "Video: Stale" : "Video: No Video")
+    readonly property color _videoStatusColor: _videoLive ? _clrGreen : (_videoStale ? _clrAmber : _clrRed)
 
     // ─────────────────────────────────────────────────────────────────────
     // DEMO LOOKUP TABLES  (read-only data, safe to treat as constants)
@@ -190,10 +233,200 @@ Item {
         assetModel.clear()
     }
 
+    function assetList() {
+        var assets = []
+        for (var i = 0; i < assetModel.count; i++) {
+            var asset = assetModel.get(i)
+            assets.push({
+                color: asset.assetColor,
+                shape: asset.assetShape,
+                points: asset.points
+            })
+        }
+        return assets
+    }
+
+    function targetClass() {
+        if (!demoLocked) {
+            return "unset"
+        }
+        if (selectedDemoIndex === 0) {
+            return demo1Color.toLowerCase()
+        }
+        if (selectedDemoIndex === 1) {
+            return demo2Shape.toLowerCase()
+        }
+        if (assetModel.count > 0) {
+            var firstAsset = assetModel.get(0)
+            return (firstAsset.assetColor + "_" + firstAsset.assetShape).toLowerCase()
+        }
+        return root.demoNames[selectedDemoIndex].toLowerCase().replace(/[^a-z0-9]+/g, "_")
+    }
+
+    function roundConfigMessage() {
+        var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
+        return {
+            type: "round_config",
+            round_id: demoLocked ? selectedDemoIndex + 1 : 0,
+            target_class: targetClass(),
+            round_spec_label: roundSpec.label,
+            fob_coordinates_label: "C&E",
+            fob_coordinates: roundSpec.ceFobCoordinates,
+            geofence_label: roundSpec.label,
+            geofence_plan_file: roundSpec.geofenceFilePath,
+            geofence_height_ft: 30,
+            camera_mode: cameraMode,
+            demo_name: demoLocked ? root.demoNames[selectedDemoIndex] : "",
+            assets: assetList()
+        }
+    }
+
+    function sendRoundConfig() {
+        root.bridgeSendStatus = "Bridge sending round config..."
+        if (!root._rosBridgeClient) {
+            root.bridgeSendStatus = "Bridge sender unavailable"
+            return
+        }
+        if (!root._rosBridgeClient.sendJsonMessage(roundConfigMessage())) {
+            root.bridgeSendStatus = "Bridge send returned false"
+        }
+    }
+
+    function deploySelectedGeofence() {
+        var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
+        if (_planMasterController && roundSpec.geofenceFilePath) {
+            _planMasterController.loadFromFile(roundSpec.geofenceFilePath)
+        }
+        showTemporaryMapOverlays()
+    }
+
+    function _clearMapObject(object) {
+        if (!object) {
+            return
+        }
+        if (mapControl && mapControl.removeMapItem) {
+            mapControl.removeMapItem(object)
+        }
+        object.destroy()
+    }
+
+    function clearTemporaryMapOverlays() {
+        _clearMapObject(_arenaOverlay)
+        _arenaOverlay = null
+        for (var i = 0; i < _fobMarkers.length; i++) {
+            _clearMapObject(_fobMarkers[i])
+        }
+        _fobMarkers = []
+    }
+
+    function pathCenter(path) {
+        var lat = 0
+        var lon = 0
+        for (var i = 0; i < path.length; i++) {
+            lat += path[i].latitude
+            lon += path[i].longitude
+        }
+        return QtPositioning.coordinate(lat / path.length, lon / path.length)
+    }
+
+    function showTemporaryMapOverlays() {
+        if (!mapControl) {
+            return
+        }
+
+        clearTemporaryMapOverlays()
+
+        _arenaOverlay = arenaOverlayComponent.createObject(mapControl, {
+            path: _arenaPath
+        })
+        mapControl.addMapItem(_arenaOverlay)
+
+        var selectedSpec = roundSpecOptions[selectedRoundSpecIndex]
+
+        var ceMarker = fobMarkerComponent.createObject(mapControl, {
+            coordinate: QtPositioning.coordinate(selectedSpec.ceFobCoordinates[0], selectedSpec.ceFobCoordinates[1], selectedSpec.ceFobCoordinates[2]),
+            label: "C&E",
+            selected: true
+        })
+        mapControl.addMapItem(ceMarker)
+        _fobMarkers.push(ceMarker)
+
+        var wvxMarker = fobMarkerComponent.createObject(mapControl, {
+            coordinate: QtPositioning.coordinate(selectedSpec.wvxFobCoordinates[0], selectedSpec.wvxFobCoordinates[1], selectedSpec.wvxFobCoordinates[2]),
+            label: "WvX",
+            selected: false
+        })
+        mapControl.addMapItem(wvxMarker)
+        _fobMarkers.push(wvxMarker)
+
+        mapControl.center = QtPositioning.coordinate(38.750765, -77.497116)
+        if (mapControl.zoomLevel < 20) {
+            mapControl.zoomLevel = 20
+        }
+    }
+
+    function sendOperatorCommand(commandName) {
+        root.bridgeSendStatus = "Bridge sending " + commandName + "..."
+        if (!root._rosBridgeClient) {
+            root.bridgeSendStatus = "Bridge sender unavailable"
+            return
+        }
+        root._rosBridgeClient.sendJsonMessage({
+            type: "operator_command",
+            command: commandName
+        })
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // DATA MODELS
     // ─────────────────────────────────────────────────────────────────────
     ListModel { id: assetModel }
+
+    Component.onCompleted: showTemporaryMapOverlays()
+    Component.onDestruction: clearTemporaryMapOverlays()
+
+    Component {
+        id: arenaOverlayComponent
+
+        MapPolygon {
+            z: QGroundControl.zOrderMapItems + 10
+            border.color: "#00c853"
+            border.width: 3
+            color: "#2200c853"
+            opacity: 0.85
+        }
+    }
+
+    Component {
+        id: fobMarkerComponent
+
+        MapQuickItem {
+            property string label: ""
+            property bool selected: false
+
+            z: QGroundControl.zOrderMapItems + 20
+            anchorPoint.x: sourceItem.width / 2
+            anchorPoint.y: sourceItem.height / 2
+
+            sourceItem: Rectangle {
+                width: fobLabel.width + 16
+                height: 28
+                radius: 14
+                color: selected ? "#1976d2" : "#263238"
+                border.color: "white"
+                border.width: selected ? 2 : 1
+
+                Text {
+                    id: fobLabel
+                    anchors.centerIn: parent
+                    text: label
+                    color: "white"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+            }
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // QGC TOOL INSETS
@@ -661,6 +894,88 @@ Item {
             // ── Mission planning ──────────────────────────────────────────
             Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
 
+            Column {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text { text: "Mission Specs"; color: "white"; font.pixelSize: 13; font.bold: true }
+
+                ComboBox {
+                    id: roundSpecCombo
+                    model: root.roundSpecOptions.map(function(option) { return option.label })
+                    width: 236
+                    implicitHeight: 30
+                    currentIndex: root.selectedRoundSpecIndex
+                    onActivated: function(i) {
+                        root.selectedRoundSpecIndex = i
+                        root.deploySelectedGeofence()
+                    }
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        text: "C&E Territory: " + roundSpecCombo.displayText
+                        color: "white"
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    popup: Popup {
+                        y: roundSpecCombo.height; width: roundSpecCombo.width; padding: 1
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: roundSpecCombo.delegateModel }
+                    }
+                    delegate: ItemDelegate {
+                        width: roundSpecCombo.width; highlighted: roundSpecCombo.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
+                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 12; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
+
+                ComboBox {
+                    id: cameraModeCombo
+                    model: ["survey", "retrieve", "manual"]
+                    width: 236
+                    implicitHeight: 30
+                    currentIndex: model.indexOf(root.cameraMode)
+                    onActivated: function(i) {
+                        root.cameraMode = model[i]
+                    }
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        text: "Camera: " + cameraModeCombo.displayText
+                        color: "white"
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    popup: Popup {
+                        y: cameraModeCombo.height; width: cameraModeCombo.width; padding: 1
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: cameraModeCombo.delegateModel }
+                    }
+                    delegate: ItemDelegate {
+                        width: cameraModeCombo.width; highlighted: cameraModeCombo.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
+                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 12; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
+
+                Rectangle {
+                    width: 236; height: 34; color: _clrBlue; radius: 6
+                    Text { anchors.centerIn: parent; text: "Send Round Config"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendRoundConfig() }
+                }
+
+                Text {
+                    width: 236
+                    text: root.bridgeSendStatus
+                    color: _clrMuted
+                    font.pixelSize: 10
+                    elide: Text.ElideRight
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
+
             Row {
                 spacing: 6
                 Text { text: "Mission Planning"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
@@ -719,7 +1034,10 @@ Item {
                     }
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: { if (_activeVehicle) _activeVehicle.flightMode = "Mission" }
+                        onClicked: {
+                            root.sendOperatorCommand("start_autonomy")
+                            if (_activeVehicle) _activeVehicle.flightMode = "Mission"
+                        }
                     }
                 }
                 Rectangle {
@@ -727,7 +1045,10 @@ Item {
                     Text { anchors.centerIn: parent; text: "Pause Mission"; color: _clrMuted; font.pixelSize: 13 }
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: { if (_activeVehicle) _activeVehicle.flightMode = "Hold" }
+                        onClicked: {
+                            root.sendOperatorCommand("pause_autonomy")
+                            if (_activeVehicle) _activeVehicle.flightMode = "Hold"
+                        }
                     }
                 }
             }
@@ -875,7 +1196,7 @@ Item {
     // COMMAND STRIP  (bottom bar)
     // Left:   ARM | armed status (live) | Flight Mode dropdown (Position/Mission/Hold)
     // Center: Complete Demo
-    // Right:  Return to Home (RTH) | Kill Switch | Retrieval Mech | Settings | AI/ML
+    // Right:  Return to Home (RTH) | Kill Switch | Settings
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -1003,6 +1324,7 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
+                        root.sendOperatorCommand("return_to_launch")
                         if (_activeVehicle) {
                             _activeVehicle.guidedModeRTL(false)
                         }
@@ -1029,46 +1351,36 @@ Item {
                 }
             }
 
-            Rectangle {
-                width:   modeToggleLbl.width + 24; height: 34; radius: 6
-                color:   _clrBlue
-                opacity: _activeVehicle ? 1.0 : 0.4
-
-                Text {
-                    id: modeToggleLbl
-                    anchors.centerIn: parent
-                    text: {
-                        if (!_activeVehicle) return "Mode Toggle"
-                        switch (_activeVehicle.flightMode) {
-                        case "Mission":    return "Switch to Stabilized"
-                        case "Stabilized": return "Switch to Auto"
-                        default:           return "Mode: " + _activeVehicle.flightMode
-                        }
-                    }
-                    color:          "white"
-                    font.pixelSize: 12
-                    font.bold:      true
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled:      !!_activeVehicle
-                    onClicked: {
-                        if (_activeVehicle.flightMode === "Mission") {
-                            _activeVehicle.setFlightMode("Stabilized")
-                        } else {
-                            _activeVehicle.setFlightMode("Mission")
-                        }
-                    }
-                }
-            }
-
-            // Retrieval Mechanism Control
-            Rectangle {
-                width: rmcLbl.width + 24; height: 34; color: _clrCard; radius: 6
-                Text { id: rmcLbl; anchors.centerIn: parent; text: "Retrieval Mechanism Control"; color: "white"; font.pixelSize: 12 }
-                MouseArea { anchors.fill: parent; onClicked: console.log("Retrieval Mechanism Control") }
-            }
+	    Button {
+		id: modeToggle
+		
+		property var vehicle: _activeVehicle
+		
+		text: {
+		    if (!vehicle) {
+		        return "No Vehicle"
+		    }
+		    switch (vehicle.flightMode) {
+		    case "Mission":
+		        return "Switch to Stabilized"
+		    case "Stabilized":
+		        return "Switch to Auto"
+		    default:
+		        return "Mode: " + vehicle.flightMode
+		    }
+		}
+		
+		onClicked: {
+		    if (!vehicle) {
+		        return
+		    }
+		    if (vehicle.flightMode === "Mission") {
+		        vehicle.setFlightMode("Stabilized")
+		    } else {
+		        vehicle.setFlightMode("Mission")
+		    }
+		}
+	    }
 
             // Settings
             Rectangle {
@@ -1079,17 +1391,6 @@ Item {
                     Text { id: settLbl; text: "Settings"; color: "white"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
                 }
                 MouseArea { anchors.fill: parent; onClicked: console.log("Settings") }
-            }
-
-            // AI/ML Asset Identification
-            Rectangle {
-                width: aiLbl.width + 24; height: 34; color: _clrPurple; radius: 6
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "⊙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: aiLbl; text: "AI/ML Asset Identification"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea { anchors.fill: parent; onClicked: console.log("AI/ML") }
             }
         }
     }
