@@ -1035,7 +1035,6 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            root.sendOperatorCommand("start_autonomy")
                             if (_activeVehicle) _activeVehicle.flightMode = "Mission"
                         }
                     }
@@ -1046,7 +1045,6 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            root.sendOperatorCommand("pause_autonomy")
                             if (_activeVehicle) _activeVehicle.flightMode = "Hold"
                         }
                     }
@@ -1324,7 +1322,6 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendOperatorCommand("return_to_launch")
                         if (_activeVehicle) {
                             _activeVehicle.guidedModeRTL(false)
                         }
