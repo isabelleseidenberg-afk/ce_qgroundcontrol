@@ -1196,7 +1196,7 @@ Item {
     // COMMAND STRIP  (bottom bar)
     // Left:   ARM | armed status (live) | Flight Mode dropdown (Position/Mission/Hold)
     // Center: Complete Demo
-    // Right:  Return to Home (RTH) | Kill Switch | Settings
+    // Right:  Return to Home (RTH) | Kill Switch | Mode Toggle | Retrieval Mech (popup) | AI/ML (popup)
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -1315,7 +1315,7 @@ Item {
 
             // Return to Home — commands guidedModeRTL + unlocks demo
             Rectangle {
-                width: rthLbl.width + 24; height: 34; color: _clrOrange; radius: 6
+                width: rthLbl.width + 32; height: 38; color: _clrOrange; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
                     Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
@@ -1335,7 +1335,7 @@ Item {
 
             // Kill Switch — commands guidedModeLand (controlled descent at current position)
             Rectangle {
-                width: landLbl.width + 24; height: 34; color: _clrKill; radius: 6
+                width: landLbl.width + 32; height: 38; color: _clrKill; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
                     Text { text: "↓"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
@@ -1350,47 +1350,136 @@ Item {
                     }
                 }
             }
-
-	    Button {
-		id: modeToggle
-		
-		property var vehicle: _activeVehicle
-		
-		text: {
-		    if (!vehicle) {
-		        return "No Vehicle"
-		    }
-		    switch (vehicle.flightMode) {
-		    case "Mission":
-		        return "Switch to Stabilized"
-		    case "Stabilized":
-		        return "Switch to Auto"
-		    default:
-		        return "Mode: " + vehicle.flightMode
-		    }
-		}
-		
-		onClicked: {
-		    if (!vehicle) {
-		        return
-		    }
-		    if (vehicle.flightMode === "Mission") {
-		        vehicle.setFlightMode("Stabilized")
-		    } else {
-		        vehicle.setFlightMode("Mission")
-		    }
-		}
-	    }
-
-            // Settings
             Rectangle {
-                width: settLbl.width + 24; height: 34; color: _clrCard; radius: 6
+                width:   modeToggleLbl.width + 32; height: 38; radius: 6
+                color:   _clrBlue
+                opacity: _activeVehicle ? 1.0 : 0.4
+
+                Text {
+                    id: modeToggleLbl
+                    anchors.centerIn: parent
+                    text: {
+                        if (!_activeVehicle) return "Mode Toggle"
+                        switch (_activeVehicle.flightMode) {
+                        case "Mission":    return "Switch to Stabilized"
+                        case "Stabilized": return "Switch to Auto"
+                        default:           return "Mode: " + _activeVehicle.flightMode
+                        }
+                    }
+                    color:          "white"
+                    font.pixelSize: 12
+                    font.bold:      true
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    enabled:      !!_activeVehicle
+                    onClicked: {
+                        if (_activeVehicle.flightMode === "Mission") {
+                            _activeVehicle.setFlightMode("Stabilized")
+                        } else {
+                            _activeVehicle.setFlightMode("Mission")
+                        }
+                    }
+                }
+            }
+
+            // Retrieval Mechanism Control
+            Rectangle {
+                width: rmcLbl.width + 32; height: 38; color: _clrCard; radius: 6
+                Text { id: rmcLbl; anchors.centerIn: parent; text: "Retrieval Mechanism Control"; color: "white"; font.pixelSize: 12 }
+                MouseArea { anchors.fill: parent; onClicked: rmcPopup.open() }
+            }
+
+            // AI/ML Asset Identification
+            Rectangle {
+                width: aiLbl.width + 32; height: 38; color: _clrPurple; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
-                    Text { text: "⚙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: settLbl; text: "Settings"; color: "white"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "⊙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: aiLbl; text: "AI/ML Asset Identification"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                 }
-                MouseArea { anchors.fill: parent; onClicked: console.log("Settings") }
+                MouseArea { anchors.fill: parent; onClicked: aiPopup.open() }
+            }
+        }
+    }
+
+    // =========================================================================
+    // COMING SOON POPUPS
+    // =========================================================================
+
+    Popup {
+        id:          rmcPopup
+        width:       380
+        x:           (root.width  - width)  / 2
+        y:           (root.height - height) / 2
+        modal:       true
+        focus:       true
+        padding:     24
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background:  Rectangle { color: _clrCard; radius: 8; border.color: _clrMuted; border.width: 1 }
+
+        Column {
+            width:   parent.width
+            spacing: 12
+
+            Text {
+                text:           "Feature In Development"
+                color:          "white"
+                font.pixelSize: 14
+                font.bold:      true
+            }
+            Text {
+                text:      "Retrieval Mechanism Control will enable autonomous payload release commands to the vehicle. This feature is not yet implemented and will be available in a future release."
+                color:     _clrMuted
+                font.pixelSize: 12
+                wrapMode:  Text.WordWrap
+                width:     parent.width
+            }
+            Item { width: 1; height: 8 }
+            Rectangle {
+                anchors.right: parent.right
+                width: gotItRmcLbl.width + 24; height: 32; color: _clrBlue; radius: 6
+                Text { id: gotItRmcLbl; anchors.centerIn: parent; text: "Got it"; color: "white"; font.pixelSize: 12 }
+                MouseArea { anchors.fill: parent; onClicked: rmcPopup.close() }
+            }
+        }
+    }
+
+    Popup {
+        id:          aiPopup
+        width:       380
+        x:           (root.width  - width)  / 2
+        y:           (root.height - height) / 2
+        modal:       true
+        focus:       true
+        padding:     24
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background:  Rectangle { color: _clrCard; radius: 8; border.color: _clrMuted; border.width: 1 }
+
+        Column {
+            width:   parent.width
+            spacing: 12
+
+            Text {
+                text:           "Feature In Development"
+                color:          "white"
+                font.pixelSize: 14
+                font.bold:      true
+            }
+            Text {
+                text:      "AI/ML Asset Identification will provide real-time object detection and classification of assets in the field. This feature is not yet implemented and will be available in a future release."
+                color:     _clrMuted
+                font.pixelSize: 12
+                wrapMode:  Text.WordWrap
+                width:     parent.width
+            }
+            Item { width: 1; height: 8 }
+            Rectangle {
+                anchors.right: parent.right
+                width: gotItAiLbl.width + 24; height: 32; color: _clrPurple; radius: 6
+                Text { id: gotItAiLbl; anchors.centerIn: parent; text: "Got it"; color: "white"; font.pixelSize: 12 }
+                MouseArea { anchors.fill: parent; onClicked: aiPopup.close() }
             }
         }
     }
