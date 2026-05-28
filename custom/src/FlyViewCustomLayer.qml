@@ -371,10 +371,18 @@ Item {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
         }
-        root._rosBridgeClient.sendJsonMessage({
-            type: "operator_command",
-            command: commandName
-        })
+
+        var payload = { source: "qgc" }
+        if (commandName === "start_mission") {
+            payload.type = "start_mission"
+        } else if (commandName === "land_mission") {
+            payload.type = "land_mission"
+        } else {
+            payload.type = "operator_command"
+            payload.command = commandName
+        }
+
+        root._rosBridgeClient.sendJsonMessage(payload)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -963,6 +971,18 @@ Item {
                     width: 236; height: 34; color: _clrBlue; radius: 6
                     Text { anchors.centerIn: parent; text: "Send Round Config"; color: "white"; font.pixelSize: 13; font.bold: true }
                     MouseArea { anchors.fill: parent; onClicked: root.sendRoundConfig() }
+                }
+
+                Rectangle {
+                    width: 236; height: 34; color: _clrGreen; radius: 6
+                    Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("start_mission") }
+                }
+
+                Rectangle {
+                    width: 236; height: 34; color: _clrOrange; radius: 6
+                    Text { anchors.centerIn: parent; text: "Land Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("land_mission") }
                 }
 
                 Text {
