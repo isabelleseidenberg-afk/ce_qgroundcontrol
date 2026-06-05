@@ -134,6 +134,23 @@ Item {
     property int selectedRoundSpecIndex: 0
     property string cameraMode: "survey"
     property string bridgeSendStatus: "Bridge: no sends yet"
+    property int selectedMissionRoundIndex: 0
+    property string selectedMissionMode: "MANUAL_STEP"
+    property int selectedManualTaskIndex: 0
+    property bool missionForce: false
+    property bool missionPanelCollapsed: false
+    property string missionModeDisplay: "MANUAL_STEP"
+    property string missionTaskDisplay: "IDLE"
+    property string missionAssetDisplay: "Asset 0/0"
+    property string missionStatusText: "Waiting for operator command"
+
+    readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
+    readonly property var missionTaskOptions: [
+        "TAKEOFF", "SURVEY_FOR_ASSET", "GAAP", "ASSET_CAPTURE", "CONFIRM_CAPTURE",
+        "ASCEND_WITH_ASSET", "RETURN_TO_DROPOFF", "LAND_AT_DROPOFF", "RELEASE_ASSET",
+        "RETURN_HOME", "LAND_HOME", "COMPLETE"
+    ]
+
     property var _arenaOverlay
     property var _fobMarkers: []
 
@@ -167,6 +184,7 @@ Item {
         id: localRosBridgeClient
         host: "127.0.0.1"
         port: 5010
+        statusPort: 5011
     }
 
     readonly property var _bridgeClient: (root._rosBridgeClient ? root._rosBridgeClient : localRosBridgeClient)
@@ -180,6 +198,9 @@ Item {
         onSendFailed: function(reason) {
             root.bridgeSendStatus = "Bridge send failed: " + reason
             console.warn("QGC ROS bridge send failed:", reason)
+        }
+        onMessageReceived: function(json) {
+            root.handleMissionStatusMessage(json)
         }
     }
 
@@ -221,12 +242,14 @@ Item {
 
     function lockDemo(index) {
         selectedDemoIndex = index
+        selectedMissionRoundIndex = index
         demoLocked        = true
     }
 
     function unlockDemo() {
         demoLocked        = false
         selectedDemoIndex = -1
+        selectedMissionRoundIndex = 0
         isArmed           = false
         demo1Color        = "Red"
         demo2Shape        = "Cube"
@@ -377,12 +400,109 @@ Item {
         var payload = {
             type: "operator_command",
             command: commandName,
-            source: "qgc"
+            source: "qgc",
+            round_id: selectedMissionRoundId(),
+            force: missionForce
         }
 
         if (!root._bridgeClient.sendJsonMessage(payload)) {
             root.bridgeSendStatus = "Bridge send returned false"
         }
+    }
+
+
+    function handleMissionStatusMessage(jsonText) {
+        var status = null
+        try {
+            status = JSON.parse(jsonText)
+        } catch (err) {
+            missionStatusText = jsonText
+            return
+        }
+        if (!status || status.type !== "mission_status") {
+            return
+        }
+        missionModeDisplay = status.current_mission_mode || missionModeDisplay
+        missionTaskDisplay = status.current_task || missionTaskDisplay
+        var assetIndex = status.current_asset_index || 0
+        var assetTotal = status.total_asset_count || 0
+        missionAssetDisplay = "Asset " + assetIndex + "/" + assetTotal
+        missionStatusText = status.status_text || status.last_failure_reason || missionStatusText
+    }
+
+    function selectedMissionRoundId() {
+        return selectedMissionRoundIndex + 1
+    }
+
+    function updateLocalMissionStatus(commandName, taskName) {
+        if (commandName === "START_AUTO") {
+            missionModeDisplay = "AUTO_SEQUENCE"
+            missionTaskDisplay = "PRECHECK"
+            missionAssetDisplay = selectedMissionRoundId() === 3 ? "Asset 1/3" : "Asset 1/1"
+            missionStatusText = "Auto start sent"
+            return
+        }
+        if (commandName === "SET_MODE") {
+            missionModeDisplay = selectedMissionMode
+            missionStatusText = "Mode command sent"
+            return
+        }
+        if (commandName === "RUN_TASK") {
+            missionModeDisplay = "MANUAL_STEP"
+            missionTaskDisplay = taskName
+            missionStatusText = "Manual task sent"
+            return
+        }
+        if (commandName === "PAUSE") {
+            missionModeDisplay = "PAUSED"
+            missionStatusText = "Pause sent"
+            return
+        }
+        if (commandName === "RESUME") {
+            missionStatusText = "Resume sent"
+            return
+        }
+        if (commandName === "ABORT") {
+            missionModeDisplay = "ABORT"
+            missionTaskDisplay = "IDLE"
+            missionStatusText = "Abort sent"
+            return
+        }
+        if (commandName === "RETURN_HOME") {
+            missionTaskDisplay = "RETURN_HOME"
+            missionStatusText = "Return home sent"
+            return
+        }
+        if (commandName === "OPERATOR_APPROVAL") {
+            missionStatusText = taskName ? "Target approved" : "Target rejected"
+        }
+    }
+
+    function sendMissionCommand(commandName, extra) {
+        root.bridgeSendStatus = "Bridge sending " + commandName + "..."
+        if (!root._bridgeClient) {
+            root.bridgeSendStatus = "Bridge sender unavailable"
+            return
+        }
+
+        var payload = {
+            type: "mission_command",
+            command: commandName,
+            source: "qgc",
+            round_id: selectedMissionRoundId(),
+            force: missionForce
+        }
+        if (extra) {
+            for (var key in extra) {
+                payload[key] = extra[key]
+            }
+        }
+
+        if (!root._bridgeClient.sendJsonMessage(payload)) {
+            root.bridgeSendStatus = "Bridge send returned false"
+            return
+        }
+        updateLocalMissionStatus(commandName, payload.task_name || payload.approved)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -667,102 +787,33 @@ Item {
             anchors.margins: 12
             spacing:         10
 
-            Row {
-                spacing: 10
-                Rectangle {
-                    width: 36; height: 36; radius: 18; color: _clrCard
-                    Text { anchors.centerIn: parent; text: "✈"; color: _clrGreen; font.pixelSize: 18 }
-                }
-                Column {
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text {
-                        text:           _activeVehicle ? _activeVehicle.vehicleName : "DEEPSEE"
-                        color:          "white"
-                        font.pixelSize: 14
-                        font.bold:      true
-                    }
-                    Text {
-                        text:           _activeVehicle ? "ACTIVE" : "INACTIVE"
-                        color:          _activeVehicle ? _clrGreen : _clrMuted
-                        font.pixelSize: 11
-                    }
-                }
-                Rectangle {
-                    width:  videoStatusText.width + 18
-                    height: 28
-                    radius: 4
-                    color:  _videoStatusColor
-                    anchors.verticalCenter: parent.verticalCenter
+            // Mission controls
+            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
 
-                    Text {
-                        id:               videoStatusText
-                        anchors.centerIn: parent
-                        text:             _videoStatusLabel
-                        color:            "white"
-                        font.pixelSize:   11
-                        font.bold:        true
+            Rectangle {
+                width: 236; height: 34; color: _clrAmber; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 8
+                    Text { text: "⊙"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "ARM"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("ARM")
+                        if (_activeVehicle) {
+                            _activeVehicle.armed = true
+                        }
+                        isArmed = true
                     }
                 }
             }
-
-            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
 
             Column {
                 Layout.fillWidth: true
-                spacing:          4
-                Text { text: "Mission Name"; color: _clrMuted; font.pixelSize: 11 }
-                Rectangle {
-                    width: 236; height: 36; color: _clrCard; radius: 4
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.left:           parent.left
-                        anchors.leftMargin:     10
-                        anchors.right:          parent.right
-                        anchors.rightMargin:    10
-                        text:                   demoLocked ? root.demoNames[root.selectedDemoIndex] : "—"
-                        color:                  demoLocked ? "white" : _clrMuted
-                        font.pixelSize:         11
-                        elide:                  Text.ElideRight
-                    }
-                }
-            }
+                spacing: 6
 
-            Row {
-                spacing: 20
-                Column {
-                    spacing: 4
-                    Text { text: "Mission Phase"; color: _clrMuted; font.pixelSize: 11 }
-                    Text { text: "Search"; color: "white"; font.pixelSize: 13; font.bold: true }
-                }
-                Column {
-                    spacing: 4
-                    Text { text: "Elapsed Time"; color: _clrMuted; font.pixelSize: 11 }
-                    Text {
-                        id:             elapsedClock
-                        color:          "white"
-                        font.pixelSize: 13
-                        font.bold:      true
-                        property int _secs: 0
-                        property var _t: Timer {
-                            interval:    1000
-                            running:     true
-                            repeat:      true
-                            onTriggered: elapsedClock._secs++
-                        }
-                        text: {
-                            var h = Math.floor(_secs / 3600).toString().padStart(2, "0")
-                            var m = Math.floor((_secs % 3600) / 60).toString().padStart(2, "0")
-                            var s = (_secs % 60).toString().padStart(2, "0")
-                            return h + ":" + m + ":" + s
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; height: 1; color: _clrCard
-                visible: demoLocked
-            }
+                Text { text: "Mission Specs"; color: "white"; font.pixelSize: 13; font.bold: true }
 
             // Demo #1
             Column {
@@ -899,14 +950,6 @@ Item {
                 }
             }
 
-            // ── Mission planning ──────────────────────────────────────────
-            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
-
-            Column {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Text { text: "Mission Specs"; color: "white"; font.pixelSize: 13; font.bold: true }
 
                 ComboBox {
                     id: roundSpecCombo
@@ -976,19 +1019,7 @@ Item {
                 Rectangle {
                     width: 236; height: 34; color: _clrGreen; radius: 6
                     Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("start_autonomy") }
-                }
-
-                Rectangle {
-                    width: 236; height: 34; color: _clrOrange; radius: 6
-                    Text { anchors.centerIn: parent; text: "Land Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("land_now") }
-                }
-
-                Rectangle {
-                    width: 236; height: 34; color: _clrCard; radius: 6
-                    Text { anchors.centerIn: parent; text: "Hold Position"; color: "white"; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("hold_position") }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("START_AUTO") }
                 }
 
                 Text {
@@ -1002,84 +1033,160 @@ Item {
 
             Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
 
-            Row {
-                spacing: 6
-                Text { text: "Mission Planning"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                Item { width: 8 }
-                Rectangle {
-                    color: _clrCard; radius: 4; width: wpBadge.width + 10; height: 20
-                    Text { id: wpBadge; anchors.centerIn: parent; text: (_currentWpIndex + 1) + " / " + _totalWpCount; color: _clrMuted; font.pixelSize: 11 }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true; color: _clrCard; radius: 4; height: actionCol.height + 16
-                Column {
-                    id: actionCol; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 8; spacing: 4
-                    Text { text: "CURRENT ACTION"; color: _clrAmber; font.pixelSize: 10; font.bold: true }
-                    Text { text: _activeWpItem ? _activeWpItem.commandName : "No active mission item"; color: "white"; font.pixelSize: 11; wrapMode: Text.WordWrap; width: parent.width }
-                    Text { text: "Slide or hold spacebar to confirm"; color: _clrMuted; font.pixelSize: 10 }
-                }
-            }
-
-            ListView {
-                id: waypointList; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 4
-                model: _missionController ? _missionController.visualItems : null
-                delegate: Rectangle {
-                    property string _status: index < _currentWpIndex  ? "done"
-                                           : index === _currentWpIndex ? "active"
-                                           :                             "pending"
-                    width: waypointList.width; height: 36
-                    color: _status === "active" ? "#1a3a5c" : "transparent"; radius: 4
-                    Row {
-                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 8
-                        Rectangle {
-                            width: 18; height: 18; radius: 9; anchors.verticalCenter: parent.verticalCenter
-                            color: _status === "done" ? _clrGreen : _status === "active" ? _clrBlue : "transparent"
-                            border.color: _status === "pending" ? _clrMuted : "transparent"; border.width: 1
-                            Text { anchors.centerIn: parent; text: _status === "done" ? "✓" : ""; color: "white"; font.pixelSize: 10 }
-                        }
-                        Text {
-                            text: object.commandName
-                            color: _status === "active" ? "white" : _clrMuted
-                            font.pixelSize: 12; font.bold: _status === "active"
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-                }
-            }
-
             Column {
-                spacing: 8; Layout.fillWidth: true
-                Rectangle {
-                    width: 236; height: 40; color: _clrGreen; radius: 6
-                    Row {
-                        anchors.centerIn: parent; spacing: 8
-                        Text { text: "▶"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: "Continue Mission"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text { text: "Mission Mode"; color: "white"; font.pixelSize: 13; font.bold: true }
+
+                ComboBox {
+                    id: missionRoundCombo
+                    model: root.missionRoundOptions
+                    width: 236
+                    implicitHeight: 28
+                    currentIndex: root.selectedMissionRoundIndex
+                    onActivated: function(i) { root.selectedMissionRoundIndex = i }
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        text: missionRoundCombo.displayText
+                        color: "white"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 8
                     }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            root.sendOperatorCommand("resume_autonomy")
-                            if (_activeVehicle) _activeVehicle.flightMode = "Mission"
+                    popup: Popup {
+                        y: missionRoundCombo.height; width: missionRoundCombo.width; padding: 1
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: missionRoundCombo.delegateModel }
+                    }
+                    delegate: ItemDelegate {
+                        width: missionRoundCombo.width; highlighted: missionRoundCombo.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
+                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 11; leftPadding: 8; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 115; height: 28; radius: 4
+                        color: selectedMissionMode === "AUTO_SEQUENCE" ? _clrBlue : _clrCard
+                        Text { anchors.centerIn: parent; text: "Auto Sequence"; color: "white"; font.pixelSize: 10; font.bold: true }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                selectedMissionMode = "AUTO_SEQUENCE"
+                                root.sendMissionCommand("SET_MODE", { mode: selectedMissionMode })
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 115; height: 28; radius: 4
+                        color: selectedMissionMode === "MANUAL_STEP" ? _clrBlue : _clrCard
+                        Text { anchors.centerIn: parent; text: "Manual Step"; color: "white"; font.pixelSize: 10; font.bold: true }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                selectedMissionMode = "MANUAL_STEP"
+                                root.sendMissionCommand("SET_MODE", { mode: selectedMissionMode })
+                            }
                         }
                     }
                 }
+
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 74; height: 28; radius: 4; color: _clrCard
+                        Text { anchors.centerIn: parent; text: "Pause"; color: "white"; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("PAUSE") }
+                    }
+                    Rectangle {
+                        width: 74; height: 28; radius: 4; color: _clrBlue
+                        Text { anchors.centerIn: parent; text: "Resume"; color: "white"; font.pixelSize: 10 }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("RESUME") }
+                    }
+                    Rectangle {
+                        width: 76; height: 28; radius: 4; color: _clrKill
+                        Text { anchors.centerIn: parent; text: "Abort"; color: "white"; font.pixelSize: 10; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("ABORT") }
+                    }
+                }
+
                 Rectangle {
-                    width: 236; height: 36; color: "transparent"; radius: 6; border.color: _clrMuted; border.width: 1
-                    Text { anchors.centerIn: parent; text: "Pause Mission"; color: _clrMuted; font.pixelSize: 13 }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            root.sendOperatorCommand("pause_autonomy")
-                            if (_activeVehicle) _activeVehicle.flightMode = "Hold"
-                        }
+                    width: 236; height: 74; color: _clrCard; radius: 4
+                    Column {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 3
+                        Text { text: "Mode: " + missionModeDisplay; color: "white"; font.pixelSize: 11; font.bold: true; width: parent.width; elide: Text.ElideRight }
+                        Text { text: "Task: " + missionTaskDisplay; color: "white"; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
+                        Text { text: missionAssetDisplay; color: _clrGreen; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
+                        Text { text: missionStatusText; color: _clrAmber; font.pixelSize: 10; width: parent.width; elide: Text.ElideRight }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    visible: missionTaskDisplay === "SURVEY_FOR_ASSET"
+                    Rectangle {
+                        width: 150; height: 28; radius: 4; color: _clrGreen
+                        Text { anchors.centerIn: parent; text: "Approve Target"; color: "white"; font.pixelSize: 10; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: true }) }
+                    }
+                    Rectangle {
+                        width: 80; height: 28; radius: 4; color: _clrKill
+                        Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 10; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: false }) }
+                    }
+                }
+
+                ComboBox {
+                    id: manualMissionTaskCombo
+                    model: root.missionTaskOptions
+                    width: 236
+                    implicitHeight: 28
+                    currentIndex: root.selectedManualTaskIndex
+                    onActivated: function(i) { root.selectedManualTaskIndex = i }
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        text: manualMissionTaskCombo.displayText
+                        color: "white"
+                        font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 8
+                        elide: Text.ElideRight
+                    }
+                    popup: Popup {
+                        y: manualMissionTaskCombo.height; width: manualMissionTaskCombo.width; padding: 1
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: Math.min(contentHeight, 240); model: manualMissionTaskCombo.delegateModel }
+                    }
+                    delegate: ItemDelegate {
+                        width: manualMissionTaskCombo.width; highlighted: manualMissionTaskCombo.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
+                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 10; leftPadding: 8; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                    }
+                }
+
+                Row {
+                    spacing: 8
+                    CheckBox {
+                        id: forceMissionCheck
+                        checked: root.missionForce
+                        onToggled: root.missionForce = checked
+                        text: "Force"
+                        contentItem: Text { text: forceMissionCheck.text; color: "white"; font.pixelSize: 11; leftPadding: forceMissionCheck.indicator.width + 6; verticalAlignment: Text.AlignVCenter }
+                    }
+                    Rectangle {
+                        width: 136; height: 30; radius: 4; color: _clrPurple
+                        Text { anchors.centerIn: parent; text: "Run Task"; color: "white"; font.pixelSize: 11; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("RUN_TASK", { task_name: root.missionTaskOptions[root.selectedManualTaskIndex] }) }
                     }
                 }
             }
         }
     }
+
+
 
 
     // =========================================================================
@@ -1097,6 +1204,63 @@ Item {
             anchors.fill:    parent
             anchors.margins: 12
             spacing:         8
+
+            Column {
+                width: 236
+                spacing: 6
+
+                Rectangle {
+                    width: 236; height: 42; color: _clrCard; radius: 6
+                    Row {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 8
+                        Text { text: "DEEPSEE"; color: _clrMuted; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                        Text {
+                            text: _activeVehicle ? "ACTIVE" : "INACTIVE"
+                            color: _activeVehicle ? _clrGreen : _clrMuted
+                            font.pixelSize: 13
+                            font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 236; height: 42; color: _videoStatusColor; radius: 6
+                    Row {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 8
+                        Text { text: "VIDEO"; color: "white"; opacity: 0.75; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: _videoStatusLabel; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                    }
+                }
+
+                Rectangle {
+                    width: 236; height: 42; color: _clrCard; radius: 6
+                    Row {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 8
+                        Text { text: "ELAPSED"; color: _clrMuted; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                        Text {
+                            id: rightElapsedClock
+                            color: "white"
+                            font.pixelSize: 13
+                            font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                            property int _secs: 0
+                            property var _t: Timer {
+                                interval: 1000
+                                running: true
+                                repeat: true
+                                onTriggered: rightElapsedClock._secs++
+                            }
+                            text: {
+                                var h = Math.floor(_secs / 3600).toString().padStart(2, "0")
+                                var m = Math.floor((_secs % 3600) / 60).toString().padStart(2, "0")
+                                var sec = (_secs % 60).toString().padStart(2, "0")
+                                return h + ":" + m + ":" + sec
+                            }
+                        }
+                    }
+                }
+            }
 
             Text { text: "Telemetry"; color: "white"; font.pixelSize: 16; font.bold: true }
 
@@ -1285,7 +1449,7 @@ Item {
                     // Command the vehicle to switch mode
                     onActivated: function(i) {
                         if (root.flightModes[i] === "Hold") {
-                            root.sendOperatorCommand("hold_position")
+                            root.sendMissionCommand("HOLD_POSITION")
                         }
                         if (_activeVehicle) {
                             _activeVehicle.flightMode = root.flightModes[i]
@@ -1344,7 +1508,7 @@ Item {
 
             // Return to Home — commands guidedModeRTL + unlocks demo
             Rectangle {
-                width: rthLbl.width + 32; height: 38; color: _clrOrange; radius: 6
+                width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
                     Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
@@ -1353,11 +1517,49 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendOperatorCommand("return_to_launch")
+                        root.sendMissionCommand("RETURN_HOME")
                         if (_activeVehicle) {
                             _activeVehicle.guidedModeRTL(false)
                         }
                         root.unlockDemo()
+                    }
+                }
+            }
+
+            // Land Mission — publishes ROS command and asks PX4/QGC for guided land
+            Rectangle {
+                width: landMissionLbl.width + 28; height: 38; color: _clrOrange; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "↓"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: landMissionLbl; text: "LAND MISSION"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("LAND_MISSION")
+                        if (_activeVehicle) {
+                            _activeVehicle.guidedModeLand()
+                        }
+                    }
+                }
+            }
+
+            // Hold Position — publishes ROS command and switches PX4/QGC to Hold
+            Rectangle {
+                width: holdLbl.width + 28; height: 38; color: _clrCard; radius: 6; border.color: _clrMuted; border.width: 1
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "Ⅱ"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: holdLbl; text: "HOLD POSITION"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("HOLD_POSITION")
+                        if (_activeVehicle) {
+                            _activeVehicle.flightMode = "Hold"
+                        }
                     }
                 }
             }
@@ -1373,7 +1575,7 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendOperatorCommand("kill_switch")
+                        root.sendMissionCommand("ABORT")
                         if (_activeVehicle) {
                             _activeVehicle.emergencyStop()
                         }
@@ -1421,13 +1623,13 @@ Item {
                 MouseArea { anchors.fill: parent; onClicked: rmcPopup.open() }
             }
 
-            // AI/ML Asset Identification
+            // YOLO model control
             Rectangle {
                 width: aiLbl.width + 32; height: 38; color: _clrPurple; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
                     Text { text: "⊙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: aiLbl; text: "AI/ML Asset Identification"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: aiLbl; text: "YOLO MODEL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                 }
                 MouseArea { anchors.fill: parent; onClicked: aiPopup.open() }
             }
@@ -1498,7 +1700,7 @@ Item {
                 font.bold:      true
             }
             Text {
-                text:      "AI/ML Asset Identification will provide real-time object detection and classification of assets in the field. This feature is not yet implemented and will be available in a future release."
+                text:      "YOLO MODEL toggles operator-facing AI asset detection. In auto mode, detection runs during SURVEY_FOR_ASSET; in manual mode, use this button to control the model."
                 color:     _clrMuted
                 font.pixelSize: 12
                 wrapMode:  Text.WordWrap
