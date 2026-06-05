@@ -169,8 +169,10 @@ Item {
         port: 5010
     }
 
+    readonly property var _bridgeClient: (root._rosBridgeClient ? root._rosBridgeClient : localRosBridgeClient)
+
     Connections {
-        target: root._rosBridgeClient
+        target: root._bridgeClient
         onMessageSent: function(json) {
             root.bridgeSendStatus = "Bridge sent " + new Date().toLocaleTimeString()
             console.log("QGC ROS bridge sent:", json)
@@ -283,11 +285,11 @@ Item {
 
     function sendRoundConfig() {
         root.bridgeSendStatus = "Bridge sending round config..."
-        if (!root._rosBridgeClient) {
+        if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
         }
-        if (!root._rosBridgeClient.sendJsonMessage(roundConfigMessage())) {
+        if (!root._bridgeClient.sendJsonMessage(roundConfigMessage())) {
             root.bridgeSendStatus = "Bridge send returned false"
         }
     }
@@ -367,14 +369,20 @@ Item {
 
     function sendOperatorCommand(commandName) {
         root.bridgeSendStatus = "Bridge sending " + commandName + "..."
-        if (!root._rosBridgeClient) {
+        if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
         }
-        root._rosBridgeClient.sendJsonMessage({
+
+        var payload = {
             type: "operator_command",
-            command: commandName
-        })
+            command: commandName,
+            source: "qgc"
+        }
+
+        if (!root._bridgeClient.sendJsonMessage(payload)) {
+            root.bridgeSendStatus = "Bridge send returned false"
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -965,6 +973,24 @@ Item {
                     MouseArea { anchors.fill: parent; onClicked: root.sendRoundConfig() }
                 }
 
+                Rectangle {
+                    width: 236; height: 34; color: _clrGreen; radius: 6
+                    Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("start_autonomy") }
+                }
+
+                Rectangle {
+                    width: 236; height: 34; color: _clrOrange; radius: 6
+                    Text { anchors.centerIn: parent; text: "Land Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("land_now") }
+                }
+
+                Rectangle {
+                    width: 236; height: 34; color: _clrCard; radius: 6
+                    Text { anchors.centerIn: parent; text: "Hold Position"; color: "white"; font.pixelSize: 13; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.sendOperatorCommand("hold_position") }
+                }
+
                 Text {
                     width: 236
                     text: root.bridgeSendStatus
@@ -1035,7 +1061,7 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            root.sendOperatorCommand("start_autonomy")
+                            root.sendOperatorCommand("resume_autonomy")
                             if (_activeVehicle) _activeVehicle.flightMode = "Mission"
                         }
                     }
@@ -1258,6 +1284,9 @@ Item {
 
                     // Command the vehicle to switch mode
                     onActivated: function(i) {
+                        if (root.flightModes[i] === "Hold") {
+                            root.sendOperatorCommand("hold_position")
+                        }
                         if (_activeVehicle) {
                             _activeVehicle.flightMode = root.flightModes[i]
                         }
@@ -1344,6 +1373,7 @@ Item {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
+                        root.sendOperatorCommand("kill_switch")
                         if (_activeVehicle) {
                             _activeVehicle.emergencyStop()
                         }
