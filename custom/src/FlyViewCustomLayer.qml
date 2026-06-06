@@ -51,7 +51,7 @@ Item {
     property var _activeWpItem:         (_missionController && _missionController.visualItems && _currentWpIndex < _missionController.visualItems.count)
                                         ? _missionController.visualItems.get(_currentWpIndex) : null
 
-    readonly property real _topBarHeight:    44
+    readonly property real _topBarHeight:    56
     readonly property real _leftPanelWidth:  260
     readonly property real _rightPanelWidth: 260
     readonly property real _bottomBarHeight: 56
@@ -589,17 +589,19 @@ Item {
 
         RowLayout {
             anchors.fill:        parent
-            anchors.leftMargin:  12
-            anchors.rightMargin: 12
-            spacing:             10
+            anchors.leftMargin:  14
+            anchors.rightMargin: 14
+            spacing:             12
 
             Rectangle {
-                width:  planBtn.width + 16; height: 28; radius: 4
+                Layout.preferredWidth:  70
+                Layout.preferredHeight: 34
+                radius: 5
                 color:  _clrCard
                 Text {
                     id:               planBtn
                     anchors.centerIn: parent
-                    text:             "⊞ PLAN"
+                    text:             "PLAN"
                     color:            "white"
                     font.pixelSize:   12
                     font.bold:        true
@@ -611,45 +613,221 @@ Item {
                 }
             }
 
-            Text {
-                text:           "Crown & Eagle Engineering"
-                color:          "white"
-                font.pixelSize: 14
-                font.bold:      true
+            Column {
+                Layout.preferredWidth:  128
+                Layout.preferredHeight: 34
+                spacing: 0
+                Text {
+                    text:           "Crown & Eagle"
+                    color:          "white"
+                    font.pixelSize: 13
+                    font.bold:      true
+                    elide:          Text.ElideRight
+                    width:          parent.width
+                }
+                Text {
+                    text:           "Engineering"
+                    color:          _clrMuted
+                    font.pixelSize: 10
+                    elide:          Text.ElideRight
+                    width:          parent.width
+                }
             }
 
             Rectangle {
-                color:  _clrBlue
-                radius: 4
-                width:  uavLabel.width + 12
-                height: 24
-                Text {
-                    id:               uavLabel
+                Layout.preferredWidth:  144
+                Layout.preferredHeight: 34
+                color:  _clrCard
+                radius: 5
+                Row {
                     anchors.centerIn: parent
-                    text:             _activeVehicle ? "UAV-" + _activeVehicle.id : "UAV-01"
-                    color:            "white"
-                    font.pixelSize:   12
-                    font.bold:        true
-                }
-            }
-
-            Row {
-                spacing: 6
-                Rectangle {
-                    width: 8; height: 8; radius: 4
-                    color: _activeVehicle ? _clrGreen : _clrRed
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                    text:                   _activeVehicle ? "CONNECTED" : "DISCONNECTED"
-                    color:                  _activeVehicle ? _clrGreen   : _clrRed
-                    font.pixelSize:         12
-                    font.bold:              true
-                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        color: _activeVehicle ? _clrGreen : _clrRed
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        id:               uavLabel
+                        text:             _activeVehicle ? "UAV-" + _activeVehicle.id : "UAV-01"
+                        color:            "white"
+                        font.pixelSize:   12
+                        font.bold:        true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text:             _activeVehicle ? "ONLINE" : "OFFLINE"
+                        color:            _activeVehicle ? _clrGreen : _clrRed
+                        font.pixelSize:   10
+                        font.bold:        true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
             }
 
             Item { Layout.fillWidth: true }
+
+            Row {
+                Layout.preferredHeight: 34
+                spacing: 8
+
+                Rectangle {
+                    width: 118; height: 34; color: _clrCard; radius: 5
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "DEEPSEE"; color: _clrMuted; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            text: _activeVehicle ? "ACTIVE" : "INACTIVE"
+                            color: _activeVehicle ? _clrGreen : _clrMuted
+                            font.pixelSize: 12
+                            font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 104; height: 34; color: _videoStatusColor; radius: 5
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "VIDEO"; color: "white"; opacity: 0.75; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text { text: _videoStatusLabel; color: "white"; font.pixelSize: 12; font.bold: true; anchors.horizontalCenter: parent.horizontalCenter }
+                    }
+                }
+
+                Rectangle {
+                    width: 122; height: 34; color: _clrCard; radius: 5
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "ELAPSED"; color: _clrMuted; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            id: topElapsedClock
+                            color: "white"
+                            font.pixelSize: 12
+                            font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            property int _secs: 0
+                            property var _t: Timer {
+                                interval: 1000
+                                running: true
+                                repeat: true
+                                onTriggered: topElapsedClock._secs++
+                            }
+                            text: {
+                                var h = Math.floor(_secs / 3600).toString().padStart(2, "0")
+                                var m = Math.floor((_secs % 3600) / 60).toString().padStart(2, "0")
+                                var sec = (_secs % 60).toString().padStart(2, "0")
+                                return h + ":" + m + ":" + sec
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth:  150
+                Layout.preferredHeight: 34
+                color:  _clrBlue
+                radius: 5
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 6
+                    Text {
+                        text:                   "MODE"
+                        color:                  "white"
+                        opacity:                0.75
+                        font.pixelSize:         9
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        id:               topModeLabel
+                        text:             root._currentFlightMode
+                        color:            "white"
+                        font.pixelSize:   12
+                        font.bold:        true
+                        anchors.verticalCenter: parent.verticalCenter
+                        width:            86
+                        elide:            Text.ElideRight
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth:  94
+                Layout.preferredHeight: 34
+                color: _clrCard
+                radius: 5
+                Text {
+                    id:             utcClock
+                    anchors.centerIn: parent
+                    color:          "white"
+                    font.pixelSize: 11
+                    font.bold:      true
+
+                    property var _timer: Timer {
+                        interval:    1000
+                        running:     true
+                        repeat:      true
+                        onTriggered: utcClock.tick()
+                    }
+
+                    function tick() {
+                        var now = new Date()
+                        utcClock.text = now.getUTCHours().toString().padStart(2, "0") + ":"
+                            + now.getUTCMinutes().toString().padStart(2, "0") + ":"
+                            + now.getUTCSeconds().toString().padStart(2, "0") + "Z"
+                    }
+
+                    Component.onCompleted: tick()
+                }
+            }
+        }
+    }
+
+
+    // =========================================================================
+    // LEFT SIDEBAR  (260 px)
+    // =========================================================================
+    Rectangle {
+        id:             leftPanel
+        anchors.top:    topBar.bottom
+        anchors.left:   parent.left
+        anchors.bottom: bottomBar.top
+        width:          _leftPanelWidth
+        color:          _clrPanel
+
+        ColumnLayout {
+            anchors.fill:    parent
+            anchors.margins: 12
+            spacing:         10
+
+            // Mission controls
+            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
+
+            Rectangle {
+                width: 236; height: 34; color: _clrAmber; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 8
+                    Text { text: "⊙"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "ARM"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("ARM")
+                        if (_activeVehicle) {
+                            _activeVehicle.armed = true
+                        }
+                        isArmed = true
+                    }
+                }
+            }
+
+            Column {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text { text: "Mission Specs"; color: "white"; font.pixelSize: 13; font.bold: true }
 
             // Demo selector
             ComboBox {
@@ -657,8 +835,8 @@ Item {
                 enabled:        !demoLocked
                 model:          ["Select Demonstration…"].concat(root.demoNames)
                 currentIndex:   root.selectedDemoIndex + 1
-                implicitWidth:  340
-                implicitHeight: 28
+                width:          236
+                implicitHeight: 30
 
                 onActivated: function(index) {
                     if (index > 0) root.lockDemo(index - 1)
@@ -716,104 +894,6 @@ Item {
                     }
                 }
             }
-
-            Item { Layout.fillWidth: true }
-
-            // Flight mode badge — shows vehicle's actual current mode
-            Row {
-                spacing: 6
-                Text {
-                    text:                   "Flight Mode:"
-                    color:                  "white"
-                    font.pixelSize:         12
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Rectangle {
-                    color:  _clrBlue
-                    radius: 4
-                    width:  topModeLabel.width + 12
-                    height: 24
-                    Text {
-                        id:               topModeLabel
-                        anchors.centerIn: parent
-                        text:             root._currentFlightMode
-                        color:            "white"
-                        font.pixelSize:   12
-                        font.bold:        true
-                    }
-                }
-            }
-
-            // UTC clock
-            Text {
-                id:             utcClock
-                color:          "white"
-                font.pixelSize: 12
-
-                property var _timer: Timer {
-                    interval:    1000
-                    running:     true
-                    repeat:      true
-                    onTriggered: utcClock.tick()
-                }
-
-                function tick() {
-                    var now = new Date()
-                    utcClock.text = "UTC: "
-                        + now.getUTCHours().toString().padStart(2, "0") + ":"
-                        + now.getUTCMinutes().toString().padStart(2, "0") + ":"
-                        + now.getUTCSeconds().toString().padStart(2, "0")
-                }
-
-                Component.onCompleted: tick()
-            }
-        }
-    }
-
-
-    // =========================================================================
-    // LEFT SIDEBAR  (260 px)
-    // =========================================================================
-    Rectangle {
-        id:             leftPanel
-        anchors.top:    topBar.bottom
-        anchors.left:   parent.left
-        anchors.bottom: bottomBar.top
-        width:          _leftPanelWidth
-        color:          _clrPanel
-
-        ColumnLayout {
-            anchors.fill:    parent
-            anchors.margins: 12
-            spacing:         10
-
-            // Mission controls
-            Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
-
-            Rectangle {
-                width: 236; height: 34; color: _clrAmber; radius: 6
-                Row {
-                    anchors.centerIn: parent; spacing: 8
-                    Text { text: "⊙"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: "ARM"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        root.sendMissionCommand("ARM")
-                        if (_activeVehicle) {
-                            _activeVehicle.armed = true
-                        }
-                        isArmed = true
-                    }
-                }
-            }
-
-            Column {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Text { text: "Mission Specs"; color: "white"; font.pixelSize: 13; font.bold: true }
 
             // Demo #1
             Column {
@@ -1039,34 +1119,7 @@ Item {
 
                 Text { text: "Mission Mode"; color: "white"; font.pixelSize: 13; font.bold: true }
 
-                ComboBox {
-                    id: missionRoundCombo
-                    model: root.missionRoundOptions
-                    width: 236
-                    implicitHeight: 28
-                    currentIndex: root.selectedMissionRoundIndex
-                    onActivated: function(i) { root.selectedMissionRoundIndex = i }
-                    background: Rectangle { color: _clrCard; radius: 4 }
-                    contentItem: Text {
-                        text: missionRoundCombo.displayText
-                        color: "white"
-                        font.pixelSize: 11
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 8
-                    }
-                    popup: Popup {
-                        y: missionRoundCombo.height; width: missionRoundCombo.width; padding: 1
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: missionRoundCombo.delegateModel }
-                    }
-                    delegate: ItemDelegate {
-                        width: missionRoundCombo.width; highlighted: missionRoundCombo.highlightedIndex === index
-                        background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
-                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 11; leftPadding: 8; verticalAlignment: Text.AlignVCenter }
-                    }
-                }
-
-                Row {
+Row {
                     spacing: 6
                     Rectangle {
                         width: 115; height: 28; radius: 4
@@ -1204,63 +1257,6 @@ Item {
             anchors.fill:    parent
             anchors.margins: 12
             spacing:         8
-
-            Column {
-                width: 236
-                spacing: 6
-
-                Rectangle {
-                    width: 236; height: 42; color: _clrCard; radius: 6
-                    Row {
-                        anchors.fill: parent; anchors.margins: 8; spacing: 8
-                        Text { text: "DEEPSEE"; color: _clrMuted; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-                        Text {
-                            text: _activeVehicle ? "ACTIVE" : "INACTIVE"
-                            color: _activeVehicle ? _clrGreen : _clrMuted
-                            font.pixelSize: 13
-                            font.bold: true
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: 236; height: 42; color: _videoStatusColor; radius: 6
-                    Row {
-                        anchors.fill: parent; anchors.margins: 8; spacing: 8
-                        Text { text: "VIDEO"; color: "white"; opacity: 0.75; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: _videoStatusLabel; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                    }
-                }
-
-                Rectangle {
-                    width: 236; height: 42; color: _clrCard; radius: 6
-                    Row {
-                        anchors.fill: parent; anchors.margins: 8; spacing: 8
-                        Text { text: "ELAPSED"; color: _clrMuted; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-                        Text {
-                            id: rightElapsedClock
-                            color: "white"
-                            font.pixelSize: 13
-                            font.bold: true
-                            anchors.verticalCenter: parent.verticalCenter
-                            property int _secs: 0
-                            property var _t: Timer {
-                                interval: 1000
-                                running: true
-                                repeat: true
-                                onTriggered: rightElapsedClock._secs++
-                            }
-                            text: {
-                                var h = Math.floor(_secs / 3600).toString().padStart(2, "0")
-                                var m = Math.floor((_secs % 3600) / 60).toString().padStart(2, "0")
-                                var sec = (_secs % 60).toString().padStart(2, "0")
-                                return h + ":" + m + ":" + sec
-                            }
-                        }
-                    }
-                }
-            }
 
             Text { text: "Telemetry"; color: "white"; font.pixelSize: 16; font.bold: true }
 
