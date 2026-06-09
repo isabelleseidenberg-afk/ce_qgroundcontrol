@@ -156,8 +156,6 @@ Item {
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
         { label: "GAAP", task: "GAAP" },
-        { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
-        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
         { label: "SET DROPOFF", task: "SET_DROPOFF" },
         { label: "RETURN DROPOFF", task: "RETURN_TO_DROPOFF" },
         { label: "LAND", task: "LAND" },
@@ -322,12 +320,26 @@ Item {
         return root.demoNames[selectedDemoIndex].toLowerCase().replace(/[^a-z0-9]+/g, "_")
     }
 
+    function assetColor() {
+        if (!demoLocked) {
+            return "unset"
+        }
+        if (selectedDemoIndex === 0) {
+            return demo1Color.toLowerCase()
+        }
+        if (assetModel.count > 0) {
+            return assetModel.get(0).assetColor.toLowerCase()
+        }
+        return "unset"
+    }
+
     function roundConfigMessage() {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
             type: "round_config",
             round_id: demoLocked ? selectedDemoIndex + 1 : 0,
             target_class: targetClass(),
+            asset_color: assetColor(),
             round_spec_label: roundSpec.label,
             fob_coordinates_label: "C&E",
             fob_coordinates: roundSpec.ceFobCoordinates,
@@ -612,6 +624,18 @@ Item {
             missionStatusText = "Waypoint goto sent: " + coordinateText(selectedWaypointCoordinate)
         }
         root.sendMissionCommand("RUN_TASK", payload)
+    }
+
+    function runGripperTask(action) {
+        selectedTaskName = "GRIPPER"
+        selectedTaskLabel = action === "OPEN" ? "OPEN GRIPPER" : "CLOSE GRIPPER"
+        selectedGripperAction = action
+        missionTaskDisplay = selectedTaskLabel
+        missionStatusText = selectedTaskLabel + " sent"
+        root.sendMissionCommand("RUN_TASK", {
+            task_name: "GRIPPER",
+            gripper_action: action
+        })
     }
 
     function updateLocalMissionStatus(commandName, taskName) {
@@ -1867,11 +1891,21 @@ Row {
                 }
             }
 
-            // Retrieval Mechanism Control
-            Rectangle {
-                width: rmcLbl.width + 32; height: 38; color: _clrCard; radius: 6
-                Text { id: rmcLbl; anchors.centerIn: parent; text: "Retrieval Mechanism Control"; color: "white"; font.pixelSize: 12 }
-                MouseArea { anchors.fill: parent; onClicked: rmcPopup.open() }
+            Row {
+                spacing: 6
+                anchors.verticalCenter: parent.verticalCenter
+
+                Rectangle {
+                    width: closeGripLbl.width + 28; height: 38; color: _clrCard; radius: 6
+                    Text { id: closeGripLbl; anchors.centerIn: parent; text: "Close Gripper"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.runGripperTask("CLOSE") }
+                }
+
+                Rectangle {
+                    width: openGripLbl.width + 28; height: 38; color: _clrCard; radius: 6
+                    Text { id: openGripLbl; anchors.centerIn: parent; text: "Open Gripper"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.runGripperTask("OPEN") }
+                }
             }
 
             // YOLO model control
@@ -1890,44 +1924,6 @@ Row {
     // =========================================================================
     // COMING SOON POPUPS
     // =========================================================================
-
-    Popup {
-        id:          rmcPopup
-        width:       380
-        x:           (root.width  - width)  / 2
-        y:           (root.height - height) / 2
-        modal:       true
-        focus:       true
-        padding:     24
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background:  Rectangle { color: _clrCard; radius: 8; border.color: _clrMuted; border.width: 1 }
-
-        Column {
-            width:   parent.width
-            spacing: 12
-
-            Text {
-                text:           "Feature In Development"
-                color:          "white"
-                font.pixelSize: 14
-                font.bold:      true
-            }
-            Text {
-                text:      "Retrieval Mechanism Control will enable autonomous payload release commands to the vehicle. This feature is not yet implemented and will be available in a future release."
-                color:     _clrMuted
-                font.pixelSize: 12
-                wrapMode:  Text.WordWrap
-                width:     parent.width
-            }
-            Item { width: 1; height: 8 }
-            Rectangle {
-                anchors.right: parent.right
-                width: gotItRmcLbl.width + 24; height: 32; color: _clrBlue; radius: 6
-                Text { id: gotItRmcLbl; anchors.centerIn: parent; text: "Got it"; color: "white"; font.pixelSize: 12 }
-                MouseArea { anchors.fill: parent; onClicked: rmcPopup.close() }
-            }
-        }
-    }
 
     Popup {
         id:          aiPopup
