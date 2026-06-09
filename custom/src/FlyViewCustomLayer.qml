@@ -137,7 +137,14 @@ Item {
     property int selectedMissionRoundIndex: 0
     property string selectedMissionMode: "MANUAL_STEP"
     property int selectedManualTaskIndex: 0
-    property bool missionForce: false
+    property string selectedTaskName: "TAKEOFF"
+    property string selectedTaskLabel: "TAKEOFF"
+    property string selectedGripperAction: ""
+    property string locationPickMode: ""
+    property var selectedWaypointCoordinate: null
+    property var selectedDropoffCoordinate: null
+    property var selectedWaypointMarker: null
+    property var selectedDropoffMarker: null
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
@@ -146,13 +153,21 @@ Item {
 
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
-        "TAKEOFF", "SURVEY_FOR_ASSET", "GAAP", "ASSET_CAPTURE", "CONFIRM_CAPTURE",
-        "ASCEND_WITH_ASSET", "RETURN_TO_DROPOFF", "LAND_AT_DROPOFF", "RELEASE_ASSET",
-        "RETURN_HOME", "LAND_HOME", "COMPLETE"
+        { label: "TAKEOFF", task: "TAKEOFF" },
+        { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
+        { label: "GAAP", task: "GAAP" },
+        { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
+        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
+        { label: "SET DROPOFF", task: "SET_DROPOFF" },
+        { label: "RETURN DROPOFF", task: "RETURN_TO_DROPOFF" },
+        { label: "LAND", task: "LAND" },
+        { label: "SET WAYPOINT", task: "SET_WAYPOINT" },
+        { label: "GO WAYPOINT", task: "GO_TO_WAYPOINT" }
     ]
 
     property var _arenaOverlay
     property var _fobMarkers: []
+    property var _missionMarkers: []
 
     readonly property var roundSpecOptions: [
         {
@@ -189,10 +204,29 @@ Item {
 
     readonly property var _bridgeClient: (root._rosBridgeClient ? root._rosBridgeClient : localRosBridgeClient)
 
+    function bridgeCommandSummary(jsonText) {
+        try {
+            var payload = JSON.parse(jsonText)
+            if (payload.type === "mission_command") {
+                var detail = payload.task_name || payload.task || payload.mode || ""
+                return "Sent: " + payload.command + (detail !== "" ? " " + detail : "")
+            }
+            if (payload.type === "round_config") {
+                return "Sent: ROUND_CONFIG R" + payload.round_id
+            }
+            if (payload.type === "operator_command") {
+                return "Sent: " + payload.command
+            }
+        } catch (err) {
+            return "Sent: bridge message"
+        }
+        return "Sent: bridge message"
+    }
+
     Connections {
         target: root._bridgeClient
         onMessageSent: function(json) {
-            root.bridgeSendStatus = "Bridge sent " + new Date().toLocaleTimeString()
+            root.bridgeSendStatus = root.bridgeCommandSummary(json)
             console.log("QGC ROS bridge sent:", json)
         }
         onSendFailed: function(reason) {
@@ -307,13 +341,13 @@ Item {
     }
 
     function sendRoundConfig() {
-        root.bridgeSendStatus = "Bridge sending round config..."
+        root.bridgeSendStatus = "Sending: ROUND_CONFIG R" + selectedMissionRoundId()
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
         }
         if (!root._bridgeClient.sendJsonMessage(roundConfigMessage())) {
-            root.bridgeSendStatus = "Bridge send returned false"
+            root.bridgeSendStatus = "Send failed"
         }
     }
 
@@ -342,6 +376,8 @@ Item {
             _clearMapObject(_fobMarkers[i])
         }
         _fobMarkers = []
+        clearMissionLocationMarker("DROP")
+        clearMissionLocationMarker("WP")
     }
 
     function pathCenter(path) {
@@ -391,7 +427,7 @@ Item {
     }
 
     function sendOperatorCommand(commandName) {
-        root.bridgeSendStatus = "Bridge sending " + commandName + "..."
+        root.bridgeSendStatus = "Sending: " + commandName
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
@@ -402,11 +438,10 @@ Item {
             command: commandName,
             source: "qgc",
             round_id: selectedMissionRoundId(),
-            force: missionForce
         }
 
         if (!root._bridgeClient.sendJsonMessage(payload)) {
-            root.bridgeSendStatus = "Bridge send returned false"
+            root.bridgeSendStatus = "Send failed"
         }
     }
 
@@ -434,6 +469,151 @@ Item {
         return selectedMissionRoundIndex + 1
     }
 
+    function coordinatePayload(coord) {
+        if (!coord) return null
+        return {
+            latitude: coord.latitude,
+            longitude: coord.longitude,
+            altitude: coord.altitude
+        }
+    }
+
+    function coordinateText(coord) {
+        if (!coord) return "no map coordinate"
+        return coord.latitude.toFixed(6) + ", " + coord.longitude.toFixed(6)
+    }
+
+    function removeMissionLocationMarkerGraphic(label) {
+        if (label === "DROP") {
+            _clearMapObject(selectedDropoffMarker)
+            selectedDropoffMarker = null
+        } else if (label === "WP") {
+            _clearMapObject(selectedWaypointMarker)
+            selectedWaypointMarker = null
+        }
+    }
+
+    function clearMissionLocationMarker(label) {
+        removeMissionLocationMarkerGraphic(label)
+        if (label === "DROP") {
+            selectedDropoffCoordinate = null
+            if (selectedTaskName === "SET_DROPOFF" || selectedTaskName === "RETURN_TO_DROPOFF") {
+                missionStatusText = "Dropoff cleared"
+            }
+        } else if (label === "WP") {
+            selectedWaypointCoordinate = null
+            if (selectedTaskName === "SET_WAYPOINT" || selectedTaskName === "GO_TO_WAYPOINT") {
+                missionStatusText = "Waypoint cleared"
+            }
+        }
+    }
+
+    function showMissionLocationMarker(label, coord) {
+        if (!mapControl || !coord) {
+            return
+        }
+        removeMissionLocationMarkerGraphic(label)
+        var marker = missionLocationMarkerComponent.createObject(mapControl, {
+            coordinate: coord,
+            label: label
+        })
+        mapControl.addMapItem(marker)
+        if (label === "DROP") {
+            selectedDropoffMarker = marker
+        } else if (label === "WP") {
+            selectedWaypointMarker = marker
+        }
+    }
+
+    function coordinateFromMapPick(mouseArea, mouseX, mouseY) {
+        if (!mapControl || !mapControl.toCoordinate) {
+            return null
+        }
+        var pointOnMap = mapControl.mapFromItem(mouseArea, mouseX, mouseY)
+        return mapControl.toCoordinate(pointOnMap, false)
+    }
+
+    function placeMissionLocationFromMap(coord) {
+        if (!coord) {
+            missionStatusText = "Map pick failed"
+            return
+        }
+        if (locationPickMode === "DROPOFF") {
+            selectedDropoffCoordinate = coord
+            showMissionLocationMarker("DROP", coord)
+            selectedTaskName = "SET_DROPOFF"
+            selectedTaskLabel = "SET DROPOFF"
+            missionTaskDisplay = selectedTaskLabel
+            missionStatusText = "Dropoff picked: " + coordinateText(coord)
+        } else if (locationPickMode === "WAYPOINT") {
+            selectedWaypointCoordinate = coord
+            showMissionLocationMarker("WP", coord)
+            selectedTaskName = "SET_WAYPOINT"
+            selectedTaskLabel = "SET WAYPOINT"
+            missionTaskDisplay = selectedTaskLabel
+            missionStatusText = "Waypoint picked: " + coordinateText(coord)
+        }
+        locationPickMode = ""
+    }
+
+    function selectMissionTask(taskName, label, gripperAction) {
+        selectedTaskName = taskName
+        selectedTaskLabel = label || taskName
+        selectedGripperAction = gripperAction || ""
+        missionTaskDisplay = selectedTaskLabel
+        if (taskName === "SET_DROPOFF") {
+            locationPickMode = "DROPOFF"
+            missionStatusText = "Click map to place dropoff"
+        } else if (taskName === "SET_WAYPOINT") {
+            locationPickMode = "WAYPOINT"
+            missionStatusText = "Click map to place waypoint"
+        } else if (taskName === "GO_TO_WAYPOINT") {
+            locationPickMode = ""
+            missionStatusText = selectedWaypointCoordinate ? "Will go to saved waypoint" : "Set waypoint first"
+        } else {
+            locationPickMode = ""
+            missionStatusText = "Task selected"
+        }
+    }
+
+    function loadSelectedMissionTask() {
+        var payload = { task_name: selectedTaskName }
+        if (selectedGripperAction !== "") {
+            payload.gripper_action = selectedGripperAction
+        }
+        if (selectedTaskName === "SET_DROPOFF") {
+            if (!selectedDropoffCoordinate) {
+                locationPickMode = "DROPOFF"
+                missionStatusText = "Click map to place dropoff first"
+                return
+            }
+            payload.dropoff_coordinate = coordinatePayload(selectedDropoffCoordinate)
+            missionStatusText = "Dropoff loaded: " + coordinateText(selectedDropoffCoordinate)
+        }
+        if (selectedTaskName === "SET_WAYPOINT") {
+            if (!selectedWaypointCoordinate) {
+                locationPickMode = "WAYPOINT"
+                missionStatusText = "Click map to place waypoint first"
+                return
+            }
+            payload.waypoint_coordinate = coordinatePayload(selectedWaypointCoordinate)
+            missionStatusText = "Waypoint loaded: " + coordinateText(selectedWaypointCoordinate)
+        }
+        if (selectedTaskName === "GO_TO_WAYPOINT") {
+            if (!selectedWaypointCoordinate) {
+                locationPickMode = "WAYPOINT"
+                missionStatusText = "Set waypoint first"
+                return
+            }
+            payload.waypoint_coordinate = coordinatePayload(selectedWaypointCoordinate)
+            if (_activeVehicle && _activeVehicle.guidedModeGotoLocation && payload.waypoint_coordinate) {
+                _activeVehicle.guidedModeGotoLocation(selectedWaypointCoordinate, 0)
+            }
+            missionStatusText = "Waypoint goto sent: " + coordinateText(selectedWaypointCoordinate)
+        }
+        root.sendMissionCommand("RUN_TASK", payload)
+    }
+
     function updateLocalMissionStatus(commandName, taskName) {
         if (commandName === "START_AUTO") {
             missionModeDisplay = "AUTO_SEQUENCE"
@@ -449,8 +629,10 @@ Item {
         }
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
-            missionTaskDisplay = taskName
-            missionStatusText = "Manual task sent"
+            missionTaskDisplay = selectedTaskLabel || taskName
+            if (selectedTaskName !== "SET_DROPOFF" && selectedTaskName !== "SET_WAYPOINT" && selectedTaskName !== "GO_TO_WAYPOINT") {
+                missionStatusText = "Task load sent"
+            }
             return
         }
         if (commandName === "PAUSE") {
@@ -469,8 +651,13 @@ Item {
             return
         }
         if (commandName === "RETURN_HOME") {
-            missionTaskDisplay = "RETURN_HOME"
-            missionStatusText = "Return home sent"
+            missionTaskDisplay = "RTL"
+            missionStatusText = "RTL sent"
+            return
+        }
+        if (commandName === "DISARM") {
+            isArmed = false
+            missionStatusText = "Disarm sent"
             return
         }
         if (commandName === "OPERATOR_APPROVAL") {
@@ -479,7 +666,7 @@ Item {
     }
 
     function sendMissionCommand(commandName, extra) {
-        root.bridgeSendStatus = "Bridge sending " + commandName + "..."
+        root.bridgeSendStatus = "Sending: " + commandName
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
@@ -490,7 +677,6 @@ Item {
             command: commandName,
             source: "qgc",
             round_id: selectedMissionRoundId(),
-            force: missionForce
         }
         if (extra) {
             for (var key in extra) {
@@ -499,7 +685,7 @@ Item {
         }
 
         if (!root._bridgeClient.sendJsonMessage(payload)) {
-            root.bridgeSendStatus = "Bridge send returned false"
+            root.bridgeSendStatus = "Send failed"
             return
         }
         updateLocalMissionStatus(commandName, payload.task_name || payload.approved)
@@ -556,6 +742,52 @@ Item {
         }
     }
 
+    Component {
+        id: missionLocationMarkerComponent
+
+        MapQuickItem {
+            property string label: ""
+
+            z: QGroundControl.zOrderMapItems + 25
+            anchorPoint.x: sourceItem.width / 2
+            anchorPoint.y: sourceItem.height
+
+            sourceItem: Rectangle {
+                width: missionLocationLabel.width + removeLocationLabel.width + 28
+                height: 30
+                radius: 5
+                color: "#111820"
+                border.color: _clrAmber
+                border.width: 2
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 8
+                    Text {
+                        id: missionLocationLabel
+                        text: label
+                        color: "white"
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    Text {
+                        id: removeLocationLabel
+                        text: "x"
+                        color: _clrAmber
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: root.clearMissionLocationMarker(label)
+                    cursorShape: Qt.PointingHandCursor
+                }
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // QGC TOOL INSETS
     // ─────────────────────────────────────────────────────────────────────
@@ -573,6 +805,41 @@ Item {
         bottomEdgeLeftInset: _bottomBarHeight
         bottomEdgeCenterInset: _bottomBarHeight
         bottomEdgeRightInset:  _bottomBarHeight
+    }
+
+
+    MouseArea {
+        id: locationPickArea
+        visible: locationPickMode !== ""
+        enabled: visible
+        anchors.top: topBar.bottom
+        anchors.bottom: bottomBar.top
+        anchors.left: leftPanel.right
+        anchors.right: rightPanel.left
+        z: QGroundControl.zOrderMapItems + 30
+        hoverEnabled: true
+        cursorShape: Qt.CrossCursor
+        onClicked: root.placeMissionLocationFromMap(root.coordinateFromMapPick(locationPickArea, mouse.x, mouse.y))
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.topMargin: 10
+            width: pickHelpText.width + 28
+            height: 32
+            radius: 6
+            color: "#CC111820"
+            border.color: _clrAmber
+            border.width: 1
+            Text {
+                id: pickHelpText
+                anchors.centerIn: parent
+                text: locationPickMode === "DROPOFF" ? "Click map to place DROP" : "Click map to place WP"
+                color: "white"
+                font.pixelSize: 12
+                font.bold: true
+            }
+        }
     }
 
 
@@ -661,6 +928,40 @@ Item {
                         font.pixelSize:   10
                         font.bold:        true
                         anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+
+            Row {
+                Layout.preferredHeight: 34
+                spacing: 6
+
+                Rectangle {
+                    width: 74; height: 34; color: _clrAmber; radius: 5
+                    Text { anchors.centerIn: parent; text: "ARM"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            root.sendMissionCommand("ARM")
+                            if (_activeVehicle) {
+                                _activeVehicle.armed = true
+                            }
+                            isArmed = true
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 84; height: 34; color: _clrCard; radius: 5; border.color: _clrAmber; border.width: 1
+                    Text { anchors.centerIn: parent; text: "DISARM"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            root.sendMissionCommand("DISARM")
+                            if (_activeVehicle) {
+                                _activeVehicle.armed = false
+                            }
+                            isArmed = false
+                        }
                     }
                 }
             }
@@ -803,25 +1104,6 @@ Item {
 
             // Mission controls
             Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
-
-            Rectangle {
-                width: 236; height: 34; color: _clrAmber; radius: 6
-                Row {
-                    anchors.centerIn: parent; spacing: 8
-                    Text { text: "⊙"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: "ARM"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        root.sendMissionCommand("ARM")
-                        if (_activeVehicle) {
-                            _activeVehicle.armed = true
-                        }
-                        isArmed = true
-                    }
-                }
-            }
 
             Column {
                 Layout.fillWidth: true
@@ -1090,16 +1372,18 @@ Item {
                     }
                 }
 
-                Rectangle {
-                    width: 236; height: 34; color: _clrBlue; radius: 6
-                    Text { anchors.centerIn: parent; text: "Send Round Config"; color: "white"; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.sendRoundConfig() }
-                }
-
-                Rectangle {
-                    width: 236; height: 34; color: _clrGreen; radius: 6
-                    Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 13; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("START_AUTO") }
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 115; height: 34; color: _clrBlue; radius: 6
+                        Text { anchors.centerIn: parent; text: "Send Config"; color: "white"; font.pixelSize: 11; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendRoundConfig() }
+                    }
+                    Rectangle {
+                        width: 115; height: 34; color: _clrGreen; radius: 6
+                        Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 11; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("START_AUTO") }
+                    }
                 }
 
                 Text {
@@ -1192,48 +1476,49 @@ Row {
                     }
                 }
 
-                ComboBox {
-                    id: manualMissionTaskCombo
-                    model: root.missionTaskOptions
-                    width: 236
-                    implicitHeight: 28
-                    currentIndex: root.selectedManualTaskIndex
-                    onActivated: function(i) { root.selectedManualTaskIndex = i }
-                    background: Rectangle { color: _clrCard; radius: 4 }
-                    contentItem: Text {
-                        text: manualMissionTaskCombo.displayText
+                Rectangle {
+                    width: 236; height: 30; color: _clrCard; radius: 4
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Task: " + selectedTaskLabel
                         color: "white"
-                        font.pixelSize: 10
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 8
+                        font.pixelSize: 11
+                        font.bold: true
                         elide: Text.ElideRight
-                    }
-                    popup: Popup {
-                        y: manualMissionTaskCombo.height; width: manualMissionTaskCombo.width; padding: 1
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: ListView { clip: true; implicitHeight: Math.min(contentHeight, 240); model: manualMissionTaskCombo.delegateModel }
-                    }
-                    delegate: ItemDelegate {
-                        width: manualMissionTaskCombo.width; highlighted: manualMissionTaskCombo.highlightedIndex === index
-                        background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
-                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 10; leftPadding: 8; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                        width: parent.width - 14
                     }
                 }
 
-                Row {
-                    spacing: 8
-                    CheckBox {
-                        id: forceMissionCheck
-                        checked: root.missionForce
-                        onToggled: root.missionForce = checked
-                        text: "Force"
-                        contentItem: Text { text: forceMissionCheck.text; color: "white"; font.pixelSize: 11; leftPadding: forceMissionCheck.indicator.width + 6; verticalAlignment: Text.AlignVCenter }
+                Grid {
+                    columns: 2
+                    spacing: 6
+                    Repeater {
+                        model: root.missionTaskOptions
+                        delegate: Rectangle {
+                            width: 115; height: 28; radius: 4
+                            color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: "white"
+                                font.pixelSize: 9
+                                font.bold: root.selectedTaskLabel === modelData.label
+                                elide: Text.ElideRight
+                                width: parent.width - 8
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "")
+                            }
+                        }
                     }
-                    Rectangle {
-                        width: 136; height: 30; radius: 4; color: _clrPurple
-                        Text { anchors.centerIn: parent; text: "Run Task"; color: "white"; font.pixelSize: 11; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("RUN_TASK", { task_name: root.missionTaskOptions[root.selectedManualTaskIndex] }) }
-                    }
+                }
+
+                Rectangle {
+                    width: 236; height: 32; radius: 4; color: _clrPurple
+                    Text { anchors.centerIn: parent; text: "Load Task"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: root.loadSelectedMissionTask() }
                 }
             }
         }
@@ -1380,9 +1665,9 @@ Row {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Left:   ARM | armed status (live) | Flight Mode dropdown (Position/Mission/Hold)
+    // Left:   Flight Mode dropdown (Position/Mission/Hold)
     // Center: Complete Demo
-    // Right:  Return to Home (RTH) | Kill Switch | Mode Toggle | Retrieval Mech (popup) | AI/ML (popup)
+    // Right:  Return to Home (RTH) | Land Mission | Hold Position | Kill Switch | Mode Toggle | Retrieval Mech (popup) | AI/ML (popup)
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -1397,36 +1682,6 @@ Row {
             anchors.leftMargin:  12
             anchors.rightMargin: 12
             spacing:             8
-
-            // ARM / DISARM
-            Rectangle {
-                id:     armButton
-                width:  armLbl.width + 24; height: 34; radius: 6
-                color:        isArmed ? _clrGreen : "transparent"
-                border.color: isArmed ? "transparent" : (_canArm ? _clrMuted : "#444")
-                border.width: 1
-                opacity:      _canArm ? 1.0 : 0.4
-
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: isArmed ? "✓" : "⊙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: armLbl; text: isArmed ? "DISARM" : "ARM"; color: "white"; font.pixelSize: 13; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent; enabled: _canArm
-                    onClicked: isArmed = !isArmed
-                    cursorShape: _canArm ? Qt.PointingHandCursor : Qt.ArrowCursor
-                }
-            }
-
-            // Armed status — shows vehicle's actual armed state
-            Text {
-                text: _activeVehicle
-                      ? (_activeVehicle.armed ? "Vehicle is armed" : "Vehicle is disarmed")
-                      : "No vehicle"
-                color: _activeVehicle && _activeVehicle.armed ? _clrAmber : _clrMuted
-                font.pixelSize: 12
-            }
 
             // Flight Mode dropdown — sends real PX4 mode commands
             Row {
