@@ -156,9 +156,9 @@ Item {
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
         { label: "GAAP", task: "GAAP" },
-        { label: "SET DROPOFF", task: "SET_DROPOFF" },
-        { label: "RETURN DROPOFF", task: "RETURN_TO_DROPOFF" },
-        { label: "LAND", task: "LAND" },
+        { label: "BATTLESHIP", task: "BATTLESHIP", round_id: 3 },
+        { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
+        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
         { label: "SET WAYPOINT", task: "SET_WAYPOINT" },
         { label: "GO WAYPOINT", task: "GO_TO_WAYPOINT" }
     ]
@@ -509,9 +509,6 @@ Item {
         removeMissionLocationMarkerGraphic(label)
         if (label === "DROP") {
             selectedDropoffCoordinate = null
-            if (selectedTaskName === "SET_DROPOFF" || selectedTaskName === "RETURN_TO_DROPOFF") {
-                missionStatusText = "Dropoff cleared"
-            }
         } else if (label === "WP") {
             selectedWaypointCoordinate = null
             if (selectedTaskName === "SET_WAYPOINT" || selectedTaskName === "GO_TO_WAYPOINT") {
@@ -550,14 +547,7 @@ Item {
             missionStatusText = "Map pick failed"
             return
         }
-        if (locationPickMode === "DROPOFF") {
-            selectedDropoffCoordinate = coord
-            showMissionLocationMarker("DROP", coord)
-            selectedTaskName = "SET_DROPOFF"
-            selectedTaskLabel = "SET DROPOFF"
-            missionTaskDisplay = selectedTaskLabel
-            missionStatusText = "Dropoff picked: " + coordinateText(coord)
-        } else if (locationPickMode === "WAYPOINT") {
+        if (locationPickMode === "WAYPOINT") {
             selectedWaypointCoordinate = coord
             showMissionLocationMarker("WP", coord)
             selectedTaskName = "SET_WAYPOINT"
@@ -573,10 +563,7 @@ Item {
         selectedTaskLabel = label || taskName
         selectedGripperAction = gripperAction || ""
         missionTaskDisplay = selectedTaskLabel
-        if (taskName === "SET_DROPOFF") {
-            locationPickMode = "DROPOFF"
-            missionStatusText = "Click map to place dropoff"
-        } else if (taskName === "SET_WAYPOINT") {
+        if (taskName === "SET_WAYPOINT") {
             locationPickMode = "WAYPOINT"
             missionStatusText = "Click map to place waypoint"
         } else if (taskName === "GO_TO_WAYPOINT") {
@@ -592,15 +579,6 @@ Item {
         var payload = { task_name: selectedTaskName }
         if (selectedGripperAction !== "") {
             payload.gripper_action = selectedGripperAction
-        }
-        if (selectedTaskName === "SET_DROPOFF") {
-            if (!selectedDropoffCoordinate) {
-                locationPickMode = "DROPOFF"
-                missionStatusText = "Click map to place dropoff first"
-                return
-            }
-            payload.dropoff_coordinate = coordinatePayload(selectedDropoffCoordinate)
-            missionStatusText = "Dropoff loaded: " + coordinateText(selectedDropoffCoordinate)
         }
         if (selectedTaskName === "SET_WAYPOINT") {
             if (!selectedWaypointCoordinate) {
@@ -654,7 +632,7 @@ Item {
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = selectedTaskLabel || taskName
-            if (selectedTaskName !== "SET_DROPOFF" && selectedTaskName !== "SET_WAYPOINT" && selectedTaskName !== "GO_TO_WAYPOINT") {
+            if (selectedTaskName !== "SET_WAYPOINT" && selectedTaskName !== "GO_TO_WAYPOINT") {
                 missionStatusText = "Task load sent"
             }
             return
@@ -952,40 +930,6 @@ Item {
                         font.pixelSize:   10
                         font.bold:        true
                         anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-            }
-
-            Row {
-                Layout.preferredHeight: 34
-                spacing: 6
-
-                Rectangle {
-                    width: 74; height: 34; color: _clrAmber; radius: 5
-                    Text { anchors.centerIn: parent; text: "ARM"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            root.sendMissionCommand("ARM")
-                            if (_activeVehicle) {
-                                _activeVehicle.armed = true
-                            }
-                            isArmed = true
-                        }
-                    }
-                }
-                Rectangle {
-                    width: 84; height: 34; color: _clrCard; radius: 5; border.color: _clrAmber; border.width: 1
-                    Text { anchors.centerIn: parent; text: "DISARM"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            root.sendMissionCommand("DISARM")
-                            if (_activeVehicle) {
-                                _activeVehicle.armed = false
-                            }
-                            isArmed = false
-                        }
                     }
                 }
             }
@@ -1519,8 +1463,10 @@ Row {
                     Repeater {
                         model: root.missionTaskOptions
                         delegate: Rectangle {
+                            property bool roundAllowed: !modelData.round_id || root.selectedMissionRoundId() === modelData.round_id
                             width: 115; height: 28; radius: 4
                             color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
+                            opacity: roundAllowed ? 1.0 : 0.35
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.label
@@ -1533,6 +1479,7 @@ Row {
                             }
                             MouseArea {
                                 anchors.fill: parent
+                                enabled: parent.roundAllowed
                                 onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "")
                             }
                         }
@@ -1689,9 +1636,7 @@ Row {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Left:   Flight Mode dropdown (Position/Mission/Hold)
-    // Center: Complete Demo
-    // Right:  Return to Home (RTH) | Land Mission | Hold Position | Kill Switch | Mode Toggle | Retrieval Mech (popup) | AI/ML (popup)
+    // Center: Hold Position | Land Mission | Return To Home | Kill Switch
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -1707,96 +1652,23 @@ Row {
             anchors.rightMargin: 12
             spacing:             8
 
-            // Flight Mode dropdown — sends real PX4 mode commands
-            Row {
-                spacing: 6
-                Text { text: "Flight Mode:"; color: "white"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
-
-                ComboBox {
-                    id:             flightModeCombo
-                    model:          root.flightModes
-                    implicitWidth:  120
-                    implicitHeight: 34
-
-                    // Track the vehicle's actual flight mode
-                    currentIndex: root.flightModes.indexOf(root._currentFlightMode)
-
-                    // Command the vehicle to switch mode
-                    onActivated: function(i) {
-                        if (root.flightModes[i] === "Hold") {
-                            root.sendMissionCommand("HOLD_POSITION")
-                        }
-                        if (_activeVehicle) {
-                            _activeVehicle.flightMode = root.flightModes[i]
-                        }
-                    }
-
-                    background: Rectangle { color: _clrCard; radius: 4 }
-
-                    contentItem: Text {
-                        // If vehicle is in a mode not in the dropdown (e.g. Return, Land),
-                        // show the actual mode name
-                        text: flightModeCombo.currentIndex >= 0
-                              ? flightModeCombo.displayText
-                              : root._currentFlightMode
-                        color:             "white"
-                        font.pixelSize:    12
-                        font.bold:         true
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding:       10
-                    }
-
-                    indicator: Text {
-                        text: "▼"; color: _clrMuted; font.pixelSize: 10
-                        anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
-                    }
-
-                    popup: Popup {
-                        y: flightModeCombo.height; width: flightModeCombo.width; padding: 1
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: flightModeCombo.delegateModel }
-                    }
-
-                    delegate: ItemDelegate {
-                        width: flightModeCombo.width; highlighted: flightModeCombo.highlightedIndex === index
-                        background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
-                        contentItem: Text {
-                            text: modelData; color: "white"; font.pixelSize: 12
-                            font.bold: flightModeCombo.currentIndex === index
-                            leftPadding: 10; verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                }
-            }
-
             Item { Layout.fillWidth: true }
 
-            // Complete Demo
+            // Hold Position — publishes ROS command and switches PX4/QGC to Hold
             Rectangle {
-                visible: demoLocked
-                width: completeLbl.width + 32; height: 36; color: _clrGreen; radius: 6
-                Text { id: completeLbl; anchors.centerIn: parent; text: "Complete Demo"; color: "white"; font.pixelSize: 13; font.bold: true }
-                MouseArea { anchors.fill: parent; onClicked: root.unlockDemo() }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            // Return to Home — commands guidedModeRTL + unlocks demo
-            Rectangle {
-                width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
+                width: holdLbl.width + 28; height: 38; color: _clrCard; radius: 6; border.color: _clrMuted; border.width: 1
                 Row {
                     anchors.centerIn: parent; spacing: 6
-                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: rthLbl; text: "RETURN TO HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "Ⅱ"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: holdLbl; text: "HOLD POSITION"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                 }
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendMissionCommand("RETURN_HOME")
+                        root.sendMissionCommand("HOLD_POSITION")
                         if (_activeVehicle) {
-                            _activeVehicle.guidedModeRTL(false)
+                            _activeVehicle.flightMode = "Hold"
                         }
-                        root.unlockDemo()
                     }
                 }
             }
@@ -1820,26 +1692,27 @@ Row {
                 }
             }
 
-            // Hold Position — publishes ROS command and switches PX4/QGC to Hold
+            // Return to Home — commands guidedModeRTL + unlocks demo
             Rectangle {
-                width: holdLbl.width + 28; height: 38; color: _clrCard; radius: 6; border.color: _clrMuted; border.width: 1
+                width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
-                    Text { text: "Ⅱ"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: holdLbl; text: "HOLD POSITION"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: rthLbl; text: "RETURN TO HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                 }
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendMissionCommand("HOLD_POSITION")
+                        root.sendMissionCommand("RETURN_HOME")
                         if (_activeVehicle) {
-                            _activeVehicle.flightMode = "Hold"
+                            _activeVehicle.guidedModeRTL(false)
                         }
+                        root.unlockDemo()
                     }
                 }
             }
 
-            // Kill Switch — commands guidedModeLand (controlled descent at current position)
+            // Kill Switch — emergency stop intent
             Rectangle {
                 width: landLbl.width + 32; height: 38; color: _clrKill; radius: 6
                 Row {
@@ -1857,67 +1730,8 @@ Row {
                     }
                 }
             }
-            Rectangle {
-                width:   modeToggleLbl.width + 32; height: 38; radius: 6
-                color:   _clrBlue
-                opacity: _activeVehicle ? 1.0 : 0.4
 
-                Text {
-                    id: modeToggleLbl
-                    anchors.centerIn: parent
-                    text: {
-                        if (!_activeVehicle) return "Mode Toggle"
-                        switch (_activeVehicle.flightMode) {
-                        case "Mission":    return "Switch to Stabilized"
-                        case "Stabilized": return "Switch to Auto"
-                        default:           return "Mode: " + _activeVehicle.flightMode
-                        }
-                    }
-                    color:          "white"
-                    font.pixelSize: 12
-                    font.bold:      true
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled:      !!_activeVehicle
-                    onClicked: {
-                        if (_activeVehicle.flightMode === "Mission") {
-                            _activeVehicle.setFlightMode("Stabilized")
-                        } else {
-                            _activeVehicle.setFlightMode("Mission")
-                        }
-                    }
-                }
-            }
-
-            Row {
-                spacing: 6
-                anchors.verticalCenter: parent.verticalCenter
-
-                Rectangle {
-                    width: closeGripLbl.width + 28; height: 38; color: _clrCard; radius: 6
-                    Text { id: closeGripLbl; anchors.centerIn: parent; text: "Close Gripper"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.runGripperTask("CLOSE") }
-                }
-
-                Rectangle {
-                    width: openGripLbl.width + 28; height: 38; color: _clrCard; radius: 6
-                    Text { id: openGripLbl; anchors.centerIn: parent; text: "Open Gripper"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.runGripperTask("OPEN") }
-                }
-            }
-
-            // YOLO model control
-            Rectangle {
-                width: aiLbl.width + 32; height: 38; color: _clrPurple; radius: 6
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "⊙"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: aiLbl; text: "YOLO MODEL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea { anchors.fill: parent; onClicked: aiPopup.open() }
-            }
+            Item { Layout.fillWidth: true }
         }
     }
 
@@ -1925,41 +1739,4 @@ Row {
     // COMING SOON POPUPS
     // =========================================================================
 
-    Popup {
-        id:          aiPopup
-        width:       380
-        x:           (root.width  - width)  / 2
-        y:           (root.height - height) / 2
-        modal:       true
-        focus:       true
-        padding:     24
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background:  Rectangle { color: _clrCard; radius: 8; border.color: _clrMuted; border.width: 1 }
-
-        Column {
-            width:   parent.width
-            spacing: 12
-
-            Text {
-                text:           "Feature In Development"
-                color:          "white"
-                font.pixelSize: 14
-                font.bold:      true
-            }
-            Text {
-                text:      "YOLO MODEL toggles operator-facing AI asset detection. In auto mode, detection runs during SURVEY_FOR_ASSET; in manual mode, use this button to control the model."
-                color:     _clrMuted
-                font.pixelSize: 12
-                wrapMode:  Text.WordWrap
-                width:     parent.width
-            }
-            Item { width: 1; height: 8 }
-            Rectangle {
-                anchors.right: parent.right
-                width: gotItAiLbl.width + 24; height: 32; color: _clrPurple; radius: 6
-                Text { id: gotItAiLbl; anchors.centerIn: parent; text: "Got it"; color: "white"; font.pixelSize: 12 }
-                MouseArea { anchors.fill: parent; onClicked: aiPopup.close() }
-            }
-        }
-    }
 }
