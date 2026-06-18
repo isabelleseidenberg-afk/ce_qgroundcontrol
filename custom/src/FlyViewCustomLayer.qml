@@ -117,11 +117,11 @@ Item {
     property string demo1Color: "Red"
 
     // Demo #2 state
-    property string demo2Shape: "Cube"
+    property string demo2Shape: "Triangle"
 
     // Demo #3 & #4 state — pending selections for the "add asset" row
     property string pendingColor: "Red"
-    property string pendingShape: "Cube"
+    property string pendingShape: "Triangle"
 
     // ─────────────────────────────────────────────────────────────────────
     // VEHICLE CONTROL STATE
@@ -252,25 +252,25 @@ Item {
         "DEMONSTRATION #4: Points Round"
     ]
 
-    readonly property var colorOptions:  ["Red", "Blue", "Yellow", "Green", "Purple"]
-    readonly property var shapeOptions:  ["Cube", "Sphere", "Triangle"]
+    readonly property var colorOptions:  ["Red", "Orange", "Yellow", "Green", "Blue", "Purple"]
+    readonly property var shapeOptions:  ["Triangle", "Circle", "Square", "Heart", "Star", "Hexagon"]
 
-    // Point values per (color, shape) for Demo #4.
-    readonly property var pointTable: ({
-        "Red":    { "Cube": 10, "Sphere": 15, "Triangle": 20 },
-        "Blue":   { "Cube": 12, "Sphere": 18, "Triangle": 22 },
-        "Yellow": { "Cube":  8, "Sphere": 12, "Triangle": 16 },
-        "Green":  { "Cube": 11, "Sphere": 14, "Triangle": 19 },
-        "Purple": { "Cube": 14, "Sphere": 20, "Triangle": 25 }
-    })
+    // Demo #4 (Points Round) adds three special assets on top of the standard shapes.
+    readonly property var demo4SpecialShapes: ["Grenade", "Jet Boat", "Grey Tank"]
+    readonly property var demo4ShapeOptions:  shapeOptions.concat(demo4SpecialShapes)
+
+    // These special shapes are not paired with a color.
+    function isColorlessShape(shape) { return demo4SpecialShapes.indexOf(shape) !== -1 }
+
+    // The Add Asset shape picker is shared by Demo #3 and #4; Demo #4 gets the extra shapes.
+    readonly property var assetShapeOptions: selectedDemoIndex === 3 ? demo4ShapeOptions : shapeOptions
+
+    // Demo #4 point values are entered by the operator per asset on the day
+    // (the customer supplies them on the spot), so there is no fixed table.
 
     // ─────────────────────────────────────────────────────────────────────
     // HELPER FUNCTIONS
     // ─────────────────────────────────────────────────────────────────────
-
-    function pointsFor(color, shape) {
-        return (pointTable[color] && pointTable[color][shape]) ? pointTable[color][shape] : 0
-    }
 
     function lockDemo(index) {
         selectedDemoIndex = index
@@ -284,9 +284,9 @@ Item {
         selectedMissionRoundIndex = 0
         isArmed           = false
         demo1Color        = "Red"
-        demo2Shape        = "Cube"
+        demo2Shape        = "Triangle"
         pendingColor      = "Red"
-        pendingShape      = "Cube"
+        pendingShape      = "Triangle"
         assetModel.clear()
     }
 
@@ -315,7 +315,8 @@ Item {
         }
         if (assetModel.count > 0) {
             var firstAsset = assetModel.get(0)
-            return (firstAsset.assetColor + "_" + firstAsset.assetShape).toLowerCase()
+            var label = firstAsset.assetColor ? (firstAsset.assetColor + "_" + firstAsset.assetShape) : firstAsset.assetShape
+            return label.toLowerCase().replace(/[^a-z0-9]+/g, "_")
         }
         return root.demoNames[selectedDemoIndex].toLowerCase().replace(/[^a-z0-9]+/g, "_")
     }
@@ -1202,10 +1203,13 @@ Item {
                     spacing: 6
                     ComboBox {
                         id: assetColorPicker; model: root.colorOptions; width: 104
+                        // The special Demo #4 shapes are not paired with a color.
+                        enabled: !root.isColorlessShape(root.pendingShape)
+                        opacity: enabled ? 1.0 : 0.4
                         currentIndex: root.colorOptions.indexOf(root.pendingColor)
                         onActivated: function(i) { root.pendingColor = root.colorOptions[i] }
                         background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: Text { text: assetColorPicker.displayText; color: "white"; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 6 }
+                        contentItem: Text { text: assetColorPicker.enabled ? assetColorPicker.displayText : "— none —"; color: "white"; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 6 }
                         popup: Popup {
                             y: assetColorPicker.height; width: assetColorPicker.width; padding: 1
                             background: Rectangle { color: _clrCard; radius: 4 }
@@ -1218,9 +1222,9 @@ Item {
                         }
                     }
                     ComboBox {
-                        id: assetShapePicker; model: root.shapeOptions; width: 88
-                        currentIndex: root.shapeOptions.indexOf(root.pendingShape)
-                        onActivated: function(i) { root.pendingShape = root.shapeOptions[i] }
+                        id: assetShapePicker; model: root.assetShapeOptions; width: 88
+                        currentIndex: root.assetShapeOptions.indexOf(root.pendingShape)
+                        onActivated: function(i) { root.pendingShape = root.assetShapeOptions[i] }
                         background: Rectangle { color: _clrCard; radius: 4 }
                         contentItem: Text { text: assetShapePicker.displayText; color: "white"; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter; leftPadding: 6 }
                         popup: Popup {
@@ -1234,17 +1238,34 @@ Item {
                             contentItem: Text { text: modelData; color: "white"; font.pixelSize: 11; leftPadding: 6; verticalAlignment: Text.AlignVCenter }
                         }
                     }
+                    // Operator-entered points for this asset (Demo #4 only).
+                    // The customer supplies values on the day, so they are typed in.
+                    TextField {
+                        id: assetPointsField
+                        visible: selectedDemoIndex === 3
+                        width: 44; height: 28
+                        placeholderText: "pts"
+                        color: "white"; font.pixelSize: 11
+                        horizontalAlignment: TextInput.AlignHCenter
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        validator: IntValidator { bottom: 0; top: 9999 }
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                    }
                     Rectangle {
+                        // Demo #4 requires a points value before an asset can be added.
+                        property bool _canAdd: assetModel.count < 3
+                                               && (selectedDemoIndex !== 3 || assetPointsField.text.length > 0)
                         width: 30; height: 28
-                        color: assetModel.count < 3 ? _clrGreen : "#555"; radius: 4
+                        color: _canAdd ? _clrGreen : "#555"; radius: 4
                         Text { anchors.centerIn: parent; text: "+"; color: "white"; font.pixelSize: 18; font.bold: true }
                         MouseArea {
                             anchors.fill: parent
+                            enabled: parent._canAdd
                             onClicked: {
-                                if (assetModel.count < 3) {
-                                    var pts = root.pointsFor(root.pendingColor, root.pendingShape)
-                                    assetModel.append({ assetColor: root.pendingColor, assetShape: root.pendingShape, points: pts })
-                                }
+                                var pts = parseInt(assetPointsField.text) || 0
+                                var clr = root.isColorlessShape(root.pendingShape) ? "" : root.pendingColor
+                                assetModel.append({ assetColor: clr, assetShape: root.pendingShape, points: pts })
+                                assetPointsField.text = ""
                             }
                         }
                     }
@@ -1255,7 +1276,7 @@ Item {
                         model: assetModel
                         delegate: Rectangle {
                             width: 236; height: 30; color: _clrCard; radius: 4
-                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; text: model.assetColor + " / " + model.assetShape; color: "white"; font.pixelSize: 11 }
+                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape; color: "white"; font.pixelSize: 11 }
                             Text { anchors.verticalCenter: parent.verticalCenter; anchors.right: removeBtn.left; anchors.rightMargin: 8; visible: selectedDemoIndex === 3; text: model.points + " pts"; color: _clrGreen; font.pixelSize: 11 }
                             Rectangle {
                                 id: removeBtn; anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
