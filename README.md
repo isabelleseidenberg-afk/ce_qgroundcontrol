@@ -143,3 +143,48 @@ The workflow also has a `workflow_dispatch` trigger, so you can build any branch
 **GitHub → Actions → QGC Release → Run workflow → select your branch → Run**
 
 When triggered manually, the `publish-release` job is skipped — no GitHub Release is created. The `.AppImage` and `.dmg` are still built and saved as workflow artifacts, which you can download from the Actions run page.
+
+---
+
+## Demonstration Flight Modes
+
+The custom Fly View overlay (`custom/src/FlyViewCustomLayer.qml`) adds a demo
+selector to the flight screen. Pick a demonstration from the dropdown to lock it
+in; the matching controls appear below. **Complete Demo** or **Return to Home**
+unlocks the selector again.
+
+### DEMONSTRATION #1: Identify Asset By Color
+
+A single color dropdown. Available colors:
+
+**Red, Orange, Yellow, Green, Blue, Purple**
+
+### DEMONSTRATION #2: Identify Asset by Shape
+
+A single shape dropdown. Available shapes:
+
+**Triangle, Circle, Square, Heart, Star, Hexagon**
+
+### DEMONSTRATION #3: Battleship
+
+An **Add Asset** panel (up to 3 assets). Each asset pairs **any color** (the six
+from Demo #1) with **any shape** (the six from Demo #2) — all 36 combinations are
+allowed. No points are involved.
+
+### DEMONSTRATION #4: Points Round
+
+The same **Add Asset** panel (up to 3 assets), with point scoring on top:
+
+- Each asset pairs a color and shape, plus an **operator-entered point value**.
+  The customer supplies the point values on the day, so they are typed in per
+  asset rather than read from a fixed table.
+- The **+** (add) button stays disabled until a points value is entered.
+- A running **Total Points** total is shown beneath the asset list.
+
+Demo #4 also offers three **special shapes** in addition to the standard six:
+
+**Grenade, Jet Boat, Grey Tank**
+
+These special shapes are **not paired with a color** — selecting one disables the
+color picker, and the asset is recorded by shape and points only. They appear only
+in Demo #4; Demos #2 and #3 keep the standard six shapes.

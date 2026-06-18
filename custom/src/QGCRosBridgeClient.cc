@@ -3,12 +3,16 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QDebug>
+#include <QtNetwork/QNetworkDatagram>
 #include <QtNetwork/QUdpSocket>
 
 QGCRosBridgeClient::QGCRosBridgeClient(QObject *parent)
     : QObject(parent)
     , _socket(new QUdpSocket(this))
+    , _statusSocket(new QUdpSocket(this))
 {
+    connect(_statusSocket, &QUdpSocket::readyRead, this, &QGCRosBridgeClient::_readPendingStatusDatagrams);
+    _bindStatusSocket();
 }
 
 QString QGCRosBridgeClient::host() const
@@ -45,6 +49,44 @@ void QGCRosBridgeClient::setPort(int port)
 
     _port = newPort;
     emit portChanged();
+}
+
+int QGCRosBridgeClient::statusPort() const
+{
+    return static_cast<int>(_statusPort);
+}
+
+void QGCRosBridgeClient::setStatusPort(int port)
+{
+    if (port < 1 || port > 65535) {
+        qWarning() << "QGCRosBridgeClient invalid status port" << port;
+        return;
+    }
+
+    const quint16 newPort = static_cast<quint16>(port);
+    if (_statusPort == newPort) {
+        return;
+    }
+
+    _statusPort = newPort;
+    _bindStatusSocket();
+    emit statusPortChanged();
+}
+
+void QGCRosBridgeClient::_bindStatusSocket()
+{
+    _statusSocket->close();
+    if (!_statusSocket->bind(QHostAddress::LocalHost, _statusPort, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+        qWarning() << "QGCRosBridgeClient status bind failed" << _statusPort << _statusSocket->errorString();
+    }
+}
+
+void QGCRosBridgeClient::_readPendingStatusDatagrams()
+{
+    while (_statusSocket->hasPendingDatagrams()) {
+        const QByteArray datagram = _statusSocket->receiveDatagram().data();
+        emit messageReceived(QString::fromUtf8(datagram));
+    }
 }
 
 bool QGCRosBridgeClient::sendJsonMessage(const QVariantMap &message)
