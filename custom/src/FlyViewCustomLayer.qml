@@ -1117,6 +1117,11 @@ Item {
                 width:          236
                 implicitHeight: 30
 
+                // Hover shows the full demo name (the closed selector elides long ones).
+                ToolTip.text:    demoComboBox.displayText
+                ToolTip.delay:   300
+                ToolTip.visible: hovered && demoText.truncated
+
                 onActivated: function(index) {
                     if (index > 0) root.lockDemo(index - 1)
                 }
@@ -1128,12 +1133,14 @@ Item {
                 }
 
                 contentItem: Text {
+                    id:                demoText
                     text:              demoComboBox.displayText
                     color:             "white"
                     font.pixelSize:    12
                     font.bold:         true
                     verticalAlignment: Text.AlignVCenter
                     leftPadding:       10
+                    rightPadding:      24
                     elide:             Text.ElideRight
                 }
 
@@ -1164,11 +1171,18 @@ Item {
                     width:       demoComboBox.width
                     highlighted: demoComboBox.highlightedIndex === index
                     background: Rectangle { color: highlighted ? _clrPurple : _clrCard }
+                    // Hover shows the full demo name when the row is truncated.
+                    ToolTip.text:    modelData
+                    ToolTip.delay:   300
+                    ToolTip.visible: hovered && itemText.truncated
                     contentItem: Text {
+                        id:                itemText
                         text:              modelData
                         color:             "white"
                         font.pixelSize:    12
                         leftPadding:       10
+                        rightPadding:      10
+                        elide:             Text.ElideRight
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
@@ -1701,17 +1715,41 @@ Row {
             anchors.rightMargin: 12
             spacing:             8
 
+            // Info — bottom-left instruction guide. Toggles a plain-English panel
+            // explaining what each control does (incl. the safety buttons).
+            Rectangle {
+                width: 38; height: 38; radius: 19
+                color: infoPanel.visible ? _clrBlue : _clrCard
+                border.color: _clrMuted; border.width: 1
+                Text { anchors.centerIn: parent; text: "i"; color: "white"; font.pixelSize: 18; font.bold: true; font.italic: true }
+                MouseArea { anchors.fill: parent; onClicked: infoPanel.visible = !infoPanel.visible }
+            }
+
             Item { Layout.fillWidth: true }
 
-            // Arm — re-arm the vehicle (e.g. after a LAND) so it can lift off again
-            // without redoing the round config. Sends ROS ARM (-> px4_command_bridge
-            // issues a real PX4 arm) and also arms directly over MAVLink for redundancy.
+            // Arm — manual (re-)arm. Issues a real PX4 arm via ROS
+            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM)
+            // and also arms directly over MAVLink for redundancy.
+            //
+            // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
+            // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
+            // itself, including a re-takeoff after a LAND. Press ARM only to manually
+            // spin up the motors WITHOUT starting a takeoff (e.g. a pre-arm check, or
+            // to re-arm after a LAND without re-running the round config). Arming alone
+            // does not fly the vehicle — you still need AUTONOMY + Takeoff to lift off.
+            //
+            // Color + label reflect the LIVE vehicle arm state (_activeVehicle.armed):
+            // green "ARMED" when armed (incl. px4_control auto-arm on AUTONOMY),
+            // blue "ARM" when disarmed (incl. PX4 auto-disarm after a LAND).
             Rectangle {
-                width: armLbl.width + 28; height: 38; color: _clrBlue; radius: 6
+                id: armBtn
+                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
+                width: Math.max(armLbl.width + 28, 96); height: 38; radius: 6
+                color: vehArmed ? _clrGreen : _clrBlue
                 Row {
                     anchors.centerIn: parent; spacing: 6
-                    Text { text: "⏻"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: armLbl; text: "ARM"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "●"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: armLbl; text: armBtn.vehArmed ? "ARMED" : "ARM"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -1824,7 +1862,71 @@ Row {
     }
 
     // =========================================================================
-    // COMING SOON POPUPS
+    // INFORMATION GUIDE (info button)
     // =========================================================================
+
+    // Operator instruction guide: a plain-English explanation of what each
+    // bottom-bar control does, with emphasis on the safety actions (Hold, Land,
+    // Return, Kill). Toggled by the bottom-left "i" button; sits just above the
+    // command bar, left-aligned.
+    Rectangle {
+        id:                  infoPanel
+        visible:             false
+        z:                   1000
+        width:               400
+        implicitHeight:      infoCol.implicitHeight + 24
+        height:              implicitHeight
+        anchors.left:        parent.left
+        anchors.leftMargin:  12
+        anchors.bottom:      bottomBar.top
+        anchors.bottomMargin: 8
+        color:               "#F2111820"
+        border.color:        _clrAmber
+        border.width:        1
+        radius:              8
+
+        Column {
+            id:             infoCol
+            anchors.left:   parent.left
+            anchors.right:  parent.right
+            anchors.top:    parent.top
+            anchors.margins: 12
+            spacing:        8
+
+            // Header with close button
+            Item {
+                width:  parent.width
+                height: 20
+                Text { text: "Control Guide — what each button does"; color: "white"; font.pixelSize: 14; font.bold: true; anchors.left: parent.left }
+                Text {
+                    text: "✕"; color: _clrMuted; font.pixelSize: 15; anchors.right: parent.right
+                    MouseArea { anchors.fill: parent; onClicked: infoPanel.visible = false }
+                }
+            }
+
+            Repeater {
+                model: [
+                    { n: "ARM",             d: "Spin up the motors manually. Usually NOT needed — Start Mission arms by itself. Green = armed, blue = disarmed." },
+                    { n: "HOLD POSITION",   d: "Stop and hover in place. The drone must already be flying." },
+                    { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
+                    { n: "RETURN TO HOME",  d: "Fly back to the launch point and land there." },
+                    { n: "COMPLETE DEMO",   d: "End the run and clear the round so you can set up a new demo." },
+                    { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." }
+                ]
+                delegate: Row {
+                    width:   infoCol.width
+                    spacing: 10
+                    Text {
+                        width: 112; text: modelData.n; color: _clrAmber
+                        font.pixelSize: 12; font.bold: true; wrapMode: Text.WordWrap
+                    }
+                    Text {
+                        width: infoCol.width - 122; text: modelData.d; color: "white"
+                        font.pixelSize: 12; wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+    }
 
 }

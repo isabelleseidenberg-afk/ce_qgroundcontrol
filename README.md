@@ -188,3 +188,39 @@ Demo #4 also offers three **special shapes** in addition to the standard six:
 These special shapes are **not paired with a color** — selecting one disables the
 color picker, and the asset is recorded by shape and points only. They appear only
 in Demo #4; Demos #2 and #3 keep the standard six shapes.
+
+## Bottom Command Bar
+
+A persistent command strip at the bottom of the Fly View. Each button sends a JSON
+mission command to the autonomy stack over the bridge (`sendMissionCommand(...)`);
+mode-changing commands are split by the ROS `qgc_ros_bridge` into the mission lane
+and a legacy mode command for the arbitrator.
+
+| Button | Sends | Effect |
+| --- | --- | --- |
+| **ARM** | `ARM` | Manual (re-)arm — see below |
+| **HOLD POSITION** | `HOLD_POSITION` | PX4 `AUTO.LOITER`, holds in place (requires airborne) |
+| **LAND MISSION** | `LAND_MISSION` | PX4 `NAV_LAND`, controlled land in place |
+| **RETURN TO HOME** | `RETURN_HOME` | PX4 native RTL |
+| **COMPLETE DEMO** | `COMPLETE_DEMO` | Resets the mission FSM to idle and unlocks the demo selector |
+| **KILL SWITCH** | `ABORT` | Emergency motor cutoff (latching) |
+
+### ARM button
+
+Issues a **real PX4 arm**: `sendMissionCommand("ARM")` → `px4_command_bridge` →
+`COMPONENT_ARM_DISARM`, plus a redundant native MAVLink arm.
+
+**When to use it — normally you don't need to.** `px4_control` auto-arms on entering
+AUTONOMY, so **Start Mission → Takeoff arms by itself**, including a re-takeoff after a
+LAND. Press **ARM** only to manually spin up the motors *without* starting a takeoff
+(e.g. a pre-arm check, or to re-arm after a LAND without re-running the round config).
+**Arming alone does not fly the vehicle — you still need AUTONOMY + Takeoff to lift off.**
+
+**Arm-state indicator.** The button color/label reflect the **live vehicle arm state**
+(`_activeVehicle.armed`), not just button presses:
+
+- **Disarmed →** blue **`⏻ ARM`**
+- **Armed →** green **`⏻ ARMED`**
+
+So it turns green automatically when `px4_control` auto-arms (no button press) and
+returns to blue when PX4 auto-disarms after a land.
