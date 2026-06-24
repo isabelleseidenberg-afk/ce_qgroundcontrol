@@ -140,11 +140,12 @@ Item {
     property string selectedTaskName: "TAKEOFF"
     property string selectedTaskLabel: "TAKEOFF"
     property string selectedGripperAction: ""
-    property string locationPickMode: ""
     property var selectedWaypointCoordinate: null
     property var selectedDropoffCoordinate: null
     property var selectedWaypointMarker: null
     property var selectedDropoffMarker: null
+    // Map double-click drops a single waypoint then asks for confirmation before flying.
+    property bool waypointConfirmVisible: false
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
@@ -158,9 +159,7 @@ Item {
         { label: "GAAP", task: "GAAP" },
         { label: "BATTLESHIP", task: "BATTLESHIP", round_id: 3 },
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
-        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
-        { label: "SET WAYPOINT", task: "SET_WAYPOINT" },
-        { label: "GO WAYPOINT", task: "GO_TO_WAYPOINT" }
+        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" }
     ]
 
     property var _arenaOverlay
@@ -543,20 +542,47 @@ Item {
         return mapControl.toCoordinate(pointOnMap, false)
     }
 
-    function placeMissionLocationFromMap(coord) {
+    // Left single-click on the map sets/moves a single waypoint marker
+    // (latest-wins). It does NOT fly — double-click opens the confirm popup.
+    function placeWaypointFromMap(coord) {
         if (!coord) {
             missionStatusText = "Map pick failed"
             return
         }
-        if (locationPickMode === "WAYPOINT") {
-            selectedWaypointCoordinate = coord
-            showMissionLocationMarker("WP", coord)
-            selectedTaskName = "SET_WAYPOINT"
-            selectedTaskLabel = "SET WAYPOINT"
-            missionTaskDisplay = selectedTaskLabel
-            missionStatusText = "Waypoint picked: " + coordinateText(coord)
+        selectedWaypointCoordinate = coord
+        showMissionLocationMarker("WP", coord)
+        missionStatusText = "Waypoint set: " + coordinateText(coord) + " — double-click to fly"
+    }
+
+    // Double-click opens the confirm popup for the placed waypoint.
+    function openWaypointConfirm() {
+        if (!selectedWaypointCoordinate) {
+            missionStatusText = "Click the map to set a waypoint first"
+            return
         }
-        locationPickMode = ""
+        waypointConfirmVisible = true
+    }
+
+    // Go: route the waypoint through our stack as GO_TO_WAYPOINT
+    // (mission_manager -> px4_control in ce_px4_bridge -> PX4).
+    function confirmGoToWaypoint() {
+        waypointConfirmVisible = false
+        if (!selectedWaypointCoordinate) {
+            return
+        }
+        selectedTaskName = "GO_TO_WAYPOINT"
+        selectedTaskLabel = "GO WAYPOINT"
+        missionTaskDisplay = selectedTaskLabel
+        root.sendMissionCommand("RUN_TASK", {
+            task_name: "GO_TO_WAYPOINT",
+            waypoint_coordinate: coordinatePayload(selectedWaypointCoordinate)
+        })
+        missionStatusText = "Flying to waypoint: " + coordinateText(selectedWaypointCoordinate)
+    }
+
+    function cancelWaypoint() {
+        waypointConfirmVisible = false
+        missionStatusText = "Waypoint flight canceled"
     }
 
     function selectMissionTask(taskName, label, gripperAction) {
@@ -564,43 +590,13 @@ Item {
         selectedTaskLabel = label || taskName
         selectedGripperAction = gripperAction || ""
         missionTaskDisplay = selectedTaskLabel
-        if (taskName === "SET_WAYPOINT") {
-            locationPickMode = "WAYPOINT"
-            missionStatusText = "Click map to place waypoint"
-        } else if (taskName === "GO_TO_WAYPOINT") {
-            locationPickMode = ""
-            missionStatusText = selectedWaypointCoordinate ? "Will go to saved waypoint" : "Set waypoint first"
-        } else {
-            locationPickMode = ""
-            missionStatusText = "Task selected"
-        }
+        missionStatusText = "Task selected"
     }
 
     function loadSelectedMissionTask() {
         var payload = { task_name: selectedTaskName }
         if (selectedGripperAction !== "") {
             payload.gripper_action = selectedGripperAction
-        }
-        if (selectedTaskName === "SET_WAYPOINT") {
-            if (!selectedWaypointCoordinate) {
-                locationPickMode = "WAYPOINT"
-                missionStatusText = "Click map to place waypoint first"
-                return
-            }
-            payload.waypoint_coordinate = coordinatePayload(selectedWaypointCoordinate)
-            missionStatusText = "Waypoint loaded: " + coordinateText(selectedWaypointCoordinate)
-        }
-        if (selectedTaskName === "GO_TO_WAYPOINT") {
-            if (!selectedWaypointCoordinate) {
-                locationPickMode = "WAYPOINT"
-                missionStatusText = "Set waypoint first"
-                return
-            }
-            payload.waypoint_coordinate = coordinatePayload(selectedWaypointCoordinate)
-            if (_activeVehicle && _activeVehicle.guidedModeGotoLocation && payload.waypoint_coordinate) {
-                _activeVehicle.guidedModeGotoLocation(selectedWaypointCoordinate, 0)
-            }
-            missionStatusText = "Waypoint goto sent: " + coordinateText(selectedWaypointCoordinate)
         }
         root.sendMissionCommand("RUN_TASK", payload)
     }
@@ -633,7 +629,7 @@ Item {
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = selectedTaskLabel || taskName
-            if (selectedTaskName !== "SET_WAYPOINT" && selectedTaskName !== "GO_TO_WAYPOINT") {
+            if (selectedTaskName !== "GO_TO_WAYPOINT") {
                 missionStatusText = "Task load sent"
             }
             return
@@ -811,36 +807,68 @@ Item {
     }
 
 
-    MouseArea {
-        id: locationPickArea
-        visible: locationPickMode !== ""
-        enabled: visible
+    // Waypoint map input. A TapHandler (not a MouseArea) is used so QGC's native
+    // map pan/zoom stay intact: single left-click sets/moves a single waypoint
+    // marker (latest-wins); double-click opens a confirm popup that flies to it
+    // through our stack (GO_TO_WAYPOINT). DragThreshold yields drags to the map.
+    Item {
+        id: waypointClickLayer
         anchors.top: topBar.bottom
         anchors.bottom: bottomBar.top
         anchors.left: leftPanel.right
         anchors.right: rightPanel.left
         z: QGroundControl.zOrderMapItems + 30
-        hoverEnabled: true
-        cursorShape: Qt.CrossCursor
-        onClicked: root.placeMissionLocationFromMap(root.coordinateFromMapPick(locationPickArea, mouse.x, mouse.y))
 
+        TapHandler {
+            id: waypointTap
+            acceptedButtons: Qt.LeftButton
+            gesturePolicy: TapHandler.DragThreshold
+            onTapped: function(eventPoint) {
+                root.placeWaypointFromMap(
+                    root.coordinateFromMapPick(waypointClickLayer, eventPoint.position.x, eventPoint.position.y))
+                if (waypointTap.tapCount >= 2) {
+                    root.openWaypointConfirm()
+                }
+            }
+        }
+
+        // Confirm-to-fly popup (top-center over the map).
         Rectangle {
+            id: waypointConfirmBanner
+            visible: root.waypointConfirmVisible
             anchors.top: parent.top
+            anchors.topMargin: 12
             anchors.horizontalCenter: parent.horizontalCenter
-            anchors.topMargin: 10
-            width: pickHelpText.width + 28
-            height: 32
+            width: confirmRow.width + 24
+            height: 44
             radius: 6
-            color: "#CC111820"
+            color: "#E6111820"
             border.color: _clrAmber
             border.width: 1
-            Text {
-                id: pickHelpText
+
+            Row {
+                id: confirmRow
                 anchors.centerIn: parent
-                text: locationPickMode === "DROPOFF" ? "Click map to place DROP" : "Click map to place WP"
-                color: "white"
-                font.pixelSize: 12
-                font.bold: true
+                spacing: 10
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Fly to waypoint?"
+                    color: "white"
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+                Rectangle {
+                    width: 58; height: 28; radius: 4; color: _clrGreen
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text { anchors.centerIn: parent; text: "Go"; color: "white"; font.pixelSize: 12; font.bold: true }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.confirmGoToWaypoint() }
+                }
+                Rectangle {
+                    width: 66; height: 28; radius: 4; color: _clrCard
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text { anchors.centerIn: parent; text: "Cancel"; color: "white"; font.pixelSize: 12 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.cancelWaypoint() }
+                }
             }
         }
     }
@@ -1089,6 +1117,11 @@ Item {
                 width:          236
                 implicitHeight: 30
 
+                // Hover shows the full demo name (the closed selector elides long ones).
+                ToolTip.text:    demoComboBox.displayText
+                ToolTip.delay:   300
+                ToolTip.visible: hovered && demoText.truncated
+
                 onActivated: function(index) {
                     if (index > 0) root.lockDemo(index - 1)
                 }
@@ -1100,12 +1133,14 @@ Item {
                 }
 
                 contentItem: Text {
+                    id:                demoText
                     text:              demoComboBox.displayText
                     color:             "white"
                     font.pixelSize:    12
                     font.bold:         true
                     verticalAlignment: Text.AlignVCenter
                     leftPadding:       10
+                    rightPadding:      24
                     elide:             Text.ElideRight
                 }
 
@@ -1136,11 +1171,18 @@ Item {
                     width:       demoComboBox.width
                     highlighted: demoComboBox.highlightedIndex === index
                     background: Rectangle { color: highlighted ? _clrPurple : _clrCard }
+                    // Hover shows the full demo name when the row is truncated.
+                    ToolTip.text:    modelData
+                    ToolTip.delay:   300
+                    ToolTip.visible: hovered && itemText.truncated
                     contentItem: Text {
+                        id:                itemText
                         text:              modelData
                         color:             "white"
                         font.pixelSize:    12
                         leftPadding:       10
+                        rightPadding:      10
+                        elide:             Text.ElideRight
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
@@ -1657,7 +1699,7 @@ Row {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Center: Hold Position | Land Mission | Return To Home | Kill Switch
+    // Center: Arm | Hold Position | Land Mission | Return To Home | Complete Demo | Kill Switch
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -1673,7 +1715,53 @@ Row {
             anchors.rightMargin: 12
             spacing:             8
 
+            // Info — bottom-left instruction guide. Toggles a plain-English panel
+            // explaining what each control does (incl. the safety buttons).
+            Rectangle {
+                width: 38; height: 38; radius: 19
+                color: infoPanel.visible ? _clrBlue : _clrCard
+                border.color: _clrMuted; border.width: 1
+                Text { anchors.centerIn: parent; text: "i"; color: "white"; font.pixelSize: 18; font.bold: true; font.italic: true }
+                MouseArea { anchors.fill: parent; onClicked: infoPanel.visible = !infoPanel.visible }
+            }
+
             Item { Layout.fillWidth: true }
+
+            // Arm — manual (re-)arm. Issues a real PX4 arm via ROS
+            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM)
+            // and also arms directly over MAVLink for redundancy.
+            //
+            // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
+            // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
+            // itself, including a re-takeoff after a LAND. Press ARM only to manually
+            // spin up the motors WITHOUT starting a takeoff (e.g. a pre-arm check, or
+            // to re-arm after a LAND without re-running the round config). Arming alone
+            // does not fly the vehicle — you still need AUTONOMY + Takeoff to lift off.
+            //
+            // Color + label reflect the LIVE vehicle arm state (_activeVehicle.armed):
+            // green "ARMED" when armed (incl. px4_control auto-arm on AUTONOMY),
+            // blue "ARM" when disarmed (incl. PX4 auto-disarm after a LAND).
+            Rectangle {
+                id: armBtn
+                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
+                width: Math.max(armLbl.width + 28, 96); height: 38; radius: 6
+                color: vehArmed ? _clrGreen : _clrBlue
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "●"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: armLbl; text: armBtn.vehArmed ? "ARMED" : "ARM"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("ARM")
+                        if (_activeVehicle) {
+                            _activeVehicle.armed = true
+                        }
+                        root.isArmed = true
+                    }
+                }
+            }
 
             // Hold Position — publishes ROS command and switches PX4/QGC to Hold
             Rectangle {
@@ -1713,7 +1801,7 @@ Row {
                 }
             }
 
-            // Return to Home — commands guidedModeRTL + unlocks demo
+            // Return to Home — commands guidedModeRTL (demo reset is the COMPLETE DEMO button)
             Rectangle {
                 width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
@@ -1728,6 +1816,23 @@ Row {
                         if (_activeVehicle) {
                             _activeVehicle.guidedModeRTL(false)
                         }
+                    }
+                }
+            }
+
+            // Complete Demo — clears the round config (locally + on the autonomy stack)
+            // so the operator can select and send a fresh round config for the next demo.
+            Rectangle {
+                width: completeLbl.width + 28; height: 38; color: _clrPurple; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "✓"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: completeLbl; text: "COMPLETE DEMO"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("COMPLETE_DEMO")
                         root.unlockDemo()
                     }
                 }
@@ -1757,7 +1862,71 @@ Row {
     }
 
     // =========================================================================
-    // COMING SOON POPUPS
+    // INFORMATION GUIDE (info button)
     // =========================================================================
+
+    // Operator instruction guide: a plain-English explanation of what each
+    // bottom-bar control does, with emphasis on the safety actions (Hold, Land,
+    // Return, Kill). Toggled by the bottom-left "i" button; sits just above the
+    // command bar, left-aligned.
+    Rectangle {
+        id:                  infoPanel
+        visible:             false
+        z:                   1000
+        width:               400
+        implicitHeight:      infoCol.implicitHeight + 24
+        height:              implicitHeight
+        anchors.left:        parent.left
+        anchors.leftMargin:  12
+        anchors.bottom:      bottomBar.top
+        anchors.bottomMargin: 8
+        color:               "#F2111820"
+        border.color:        _clrAmber
+        border.width:        1
+        radius:              8
+
+        Column {
+            id:             infoCol
+            anchors.left:   parent.left
+            anchors.right:  parent.right
+            anchors.top:    parent.top
+            anchors.margins: 12
+            spacing:        8
+
+            // Header with close button
+            Item {
+                width:  parent.width
+                height: 20
+                Text { text: "Control Guide — what each button does"; color: "white"; font.pixelSize: 14; font.bold: true; anchors.left: parent.left }
+                Text {
+                    text: "✕"; color: _clrMuted; font.pixelSize: 15; anchors.right: parent.right
+                    MouseArea { anchors.fill: parent; onClicked: infoPanel.visible = false }
+                }
+            }
+
+            Repeater {
+                model: [
+                    { n: "ARM",             d: "Spin up the motors manually. Usually NOT needed — Start Mission arms by itself. Green = armed, blue = disarmed." },
+                    { n: "HOLD POSITION",   d: "Stop and hover in place. The drone must already be flying." },
+                    { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
+                    { n: "RETURN TO HOME",  d: "Fly back to the launch point and land there." },
+                    { n: "COMPLETE DEMO",   d: "End the run and clear the round so you can set up a new demo." },
+                    { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." }
+                ]
+                delegate: Row {
+                    width:   infoCol.width
+                    spacing: 10
+                    Text {
+                        width: 112; text: modelData.n; color: _clrAmber
+                        font.pixelSize: 12; font.bold: true; wrapMode: Text.WordWrap
+                    }
+                    Text {
+                        width: infoCol.width - 122; text: modelData.d; color: "white"
+                        font.pixelSize: 12; wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+    }
 
 }
