@@ -169,12 +169,14 @@ Item {
     readonly property var roundSpecOptions: [
         {
             label: "Outfield",
+            territory: "outfield",
             ceFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
             wvxFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
         },
         {
             label: "Home Base",
+            territory: "bases",
             ceFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
             wvxFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
@@ -333,11 +335,17 @@ Item {
         return "unset"
     }
 
+    function selectedTerritory() {
+        var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
+        return roundSpec && roundSpec.territory ? roundSpec.territory : "outfield"
+    }
+
     function roundConfigMessage() {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
             type: "round_config",
             round_id: demoLocked ? selectedDemoIndex + 1 : 0,
+            territory: selectedTerritory(),
             target_class: targetClass(),
             asset_color: assetColor(),
             round_spec_label: roundSpec.label,
