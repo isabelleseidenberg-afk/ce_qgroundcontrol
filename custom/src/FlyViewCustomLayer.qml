@@ -140,12 +140,6 @@ Item {
     property string selectedTaskName: "TAKEOFF"
     property string selectedTaskLabel: "TAKEOFF"
     property string selectedGripperAction: ""
-    property var selectedWaypointCoordinate: null
-    property var selectedDropoffCoordinate: null
-    property var selectedWaypointMarker: null
-    property var selectedDropoffMarker: null
-    // Map double-click drops a single waypoint then asks for confirmation before flying.
-    property bool waypointConfirmVisible: false
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
@@ -164,8 +158,6 @@ Item {
 
     property var _arenaOverlay
     property var _fobMarkers: []
-    property var _missionMarkers: []
-
     readonly property var roundSpecOptions: [
         {
             label: "Outfield",
@@ -396,8 +388,6 @@ Item {
             _clearMapObject(_fobMarkers[i])
         }
         _fobMarkers = []
-        clearMissionLocationMarker("DROP")
-        clearMissionLocationMarker("WP")
     }
 
     function pathCenter(path) {
@@ -489,110 +479,6 @@ Item {
         return selectedMissionRoundIndex + 1
     }
 
-    function coordinatePayload(coord) {
-        if (!coord) return null
-        return {
-            latitude: coord.latitude,
-            longitude: coord.longitude,
-            altitude: coord.altitude
-        }
-    }
-
-    function coordinateText(coord) {
-        if (!coord) return "no map coordinate"
-        return coord.latitude.toFixed(6) + ", " + coord.longitude.toFixed(6)
-    }
-
-    function removeMissionLocationMarkerGraphic(label) {
-        if (label === "DROP") {
-            _clearMapObject(selectedDropoffMarker)
-            selectedDropoffMarker = null
-        } else if (label === "WP") {
-            _clearMapObject(selectedWaypointMarker)
-            selectedWaypointMarker = null
-        }
-    }
-
-    function clearMissionLocationMarker(label) {
-        removeMissionLocationMarkerGraphic(label)
-        if (label === "DROP") {
-            selectedDropoffCoordinate = null
-        } else if (label === "WP") {
-            selectedWaypointCoordinate = null
-            if (selectedTaskName === "SET_WAYPOINT" || selectedTaskName === "GO_TO_WAYPOINT") {
-                missionStatusText = "Waypoint cleared"
-            }
-        }
-    }
-
-    function showMissionLocationMarker(label, coord) {
-        if (!mapControl || !coord) {
-            return
-        }
-        removeMissionLocationMarkerGraphic(label)
-        var marker = missionLocationMarkerComponent.createObject(mapControl, {
-            coordinate: coord,
-            label: label
-        })
-        mapControl.addMapItem(marker)
-        if (label === "DROP") {
-            selectedDropoffMarker = marker
-        } else if (label === "WP") {
-            selectedWaypointMarker = marker
-        }
-    }
-
-    function coordinateFromMapPick(mouseArea, mouseX, mouseY) {
-        if (!mapControl || !mapControl.toCoordinate) {
-            return null
-        }
-        var pointOnMap = mapControl.mapFromItem(mouseArea, mouseX, mouseY)
-        return mapControl.toCoordinate(pointOnMap, false)
-    }
-
-    // Left single-click on the map sets/moves a single waypoint marker
-    // (latest-wins). It does NOT fly — double-click opens the confirm popup.
-    function placeWaypointFromMap(coord) {
-        if (!coord) {
-            missionStatusText = "Map pick failed"
-            return
-        }
-        selectedWaypointCoordinate = coord
-        showMissionLocationMarker("WP", coord)
-        missionStatusText = "Waypoint set: " + coordinateText(coord) + " — double-click to fly"
-    }
-
-    // Double-click opens the confirm popup for the placed waypoint.
-    function openWaypointConfirm() {
-        if (!selectedWaypointCoordinate) {
-            missionStatusText = "Click the map to set a waypoint first"
-            return
-        }
-        waypointConfirmVisible = true
-    }
-
-    // Go: route the waypoint through our stack as GO_TO_WAYPOINT
-    // (mission_manager -> px4_control in ce_px4_bridge -> PX4).
-    function confirmGoToWaypoint() {
-        waypointConfirmVisible = false
-        if (!selectedWaypointCoordinate) {
-            return
-        }
-        selectedTaskName = "GO_TO_WAYPOINT"
-        selectedTaskLabel = "GO WAYPOINT"
-        missionTaskDisplay = selectedTaskLabel
-        root.sendMissionCommand("RUN_TASK", {
-            task_name: "GO_TO_WAYPOINT",
-            waypoint_coordinate: coordinatePayload(selectedWaypointCoordinate)
-        })
-        missionStatusText = "Flying to waypoint: " + coordinateText(selectedWaypointCoordinate)
-    }
-
-    function cancelWaypoint() {
-        waypointConfirmVisible = false
-        missionStatusText = "Waypoint flight canceled"
-    }
-
     function selectMissionTask(taskName, label, gripperAction) {
         selectedTaskName = taskName
         selectedTaskLabel = label || taskName
@@ -607,6 +493,14 @@ Item {
             payload.gripper_action = selectedGripperAction
         }
         root.sendMissionCommand("RUN_TASK", payload)
+        if (selectedTaskName === "TAKEOFF" && _activeVehicle) {
+            var takeoffAltitude = Math.max(10, _activeVehicle.minimumTakeoffAltitudeMeters())
+            if (_activeVehicle.guidedTakeoffSupported) {
+                _activeVehicle.guidedModeTakeoff(takeoffAltitude)
+            } else if (_activeVehicle.takeoffVehicleSupported) {
+                _activeVehicle.startTakeoff()
+            }
+        }
     }
 
     function runGripperTask(action) {
@@ -637,9 +531,7 @@ Item {
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = selectedTaskLabel || taskName
-            if (selectedTaskName !== "GO_TO_WAYPOINT") {
-                missionStatusText = "Task load sent"
-            }
+            missionStatusText = "Task load sent"
             return
         }
         if (commandName === "PAUSE") {
@@ -749,52 +641,6 @@ Item {
         }
     }
 
-    Component {
-        id: missionLocationMarkerComponent
-
-        MapQuickItem {
-            property string label: ""
-
-            z: QGroundControl.zOrderMapItems + 25
-            anchorPoint.x: sourceItem.width / 2
-            anchorPoint.y: sourceItem.height
-
-            sourceItem: Rectangle {
-                width: missionLocationLabel.width + removeLocationLabel.width + 28
-                height: 30
-                radius: 5
-                color: "#111820"
-                border.color: _clrAmber
-                border.width: 2
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: 8
-                    Text {
-                        id: missionLocationLabel
-                        text: label
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                    }
-                    Text {
-                        id: removeLocationLabel
-                        text: "x"
-                        color: _clrAmber
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.clearMissionLocationMarker(label)
-                    cursorShape: Qt.PointingHandCursor
-                }
-            }
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────
     // QGC TOOL INSETS
     // ─────────────────────────────────────────────────────────────────────
@@ -812,73 +658,6 @@ Item {
         bottomEdgeLeftInset: _bottomBarHeight
         bottomEdgeCenterInset: _bottomBarHeight
         bottomEdgeRightInset:  _bottomBarHeight
-    }
-
-
-    // Waypoint map input. A TapHandler (not a MouseArea) is used so QGC's native
-    // map pan/zoom stay intact: single left-click sets/moves a single waypoint
-    // marker (latest-wins); double-click opens a confirm popup that flies to it
-    // through our stack (GO_TO_WAYPOINT). DragThreshold yields drags to the map.
-    Item {
-        id: waypointClickLayer
-        anchors.top: topBar.bottom
-        anchors.bottom: bottomBar.top
-        anchors.left: leftPanel.right
-        anchors.right: rightPanel.left
-        z: QGroundControl.zOrderMapItems + 30
-
-        TapHandler {
-            id: waypointTap
-            acceptedButtons: Qt.LeftButton
-            gesturePolicy: TapHandler.DragThreshold
-            onTapped: function(eventPoint) {
-                root.placeWaypointFromMap(
-                    root.coordinateFromMapPick(waypointClickLayer, eventPoint.position.x, eventPoint.position.y))
-                if (waypointTap.tapCount >= 2) {
-                    root.openWaypointConfirm()
-                }
-            }
-        }
-
-        // Confirm-to-fly popup (top-center over the map).
-        Rectangle {
-            id: waypointConfirmBanner
-            visible: root.waypointConfirmVisible
-            anchors.top: parent.top
-            anchors.topMargin: 12
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: confirmRow.width + 24
-            height: 44
-            radius: 6
-            color: "#E6111820"
-            border.color: _clrAmber
-            border.width: 1
-
-            Row {
-                id: confirmRow
-                anchors.centerIn: parent
-                spacing: 10
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Fly to waypoint?"
-                    color: "white"
-                    font.pixelSize: 12
-                    font.bold: true
-                }
-                Rectangle {
-                    width: 58; height: 28; radius: 4; color: _clrGreen
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { anchors.centerIn: parent; text: "Go"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.confirmGoToWaypoint() }
-                }
-                Rectangle {
-                    width: 66; height: 28; radius: 4; color: _clrCard
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { anchors.centerIn: parent; text: "Cancel"; color: "white"; font.pixelSize: 12 }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.cancelWaypoint() }
-                }
-            }
-        }
     }
 
 
@@ -1784,7 +1563,7 @@ Row {
                     onClicked: {
                         root.sendMissionCommand("HOLD_POSITION")
                         if (_activeVehicle) {
-                            _activeVehicle.flightMode = "Hold"
+                            _activeVehicle.flightMode = _activeVehicle.pauseFlightMode || "Hold"
                         }
                     }
                 }
