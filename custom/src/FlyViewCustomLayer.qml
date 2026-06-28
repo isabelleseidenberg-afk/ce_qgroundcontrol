@@ -529,14 +529,6 @@ Item {
             root.displaySelectedSurveyPlan()
         }
         root.sendMissionCommand("RUN_TASK", payload)
-        if (selectedTaskName === "TAKEOFF" && _activeVehicle) {
-            var takeoffAltitude = Math.max(10, _activeVehicle.minimumTakeoffAltitudeMeters())
-            if (_activeVehicle.guidedTakeoffSupported) {
-                _activeVehicle.guidedModeTakeoff(takeoffAltitude)
-            } else if (_activeVehicle.takeoffVehicleSupported) {
-                _activeVehicle.startTakeoff()
-            }
-        }
     }
 
     function runGripperTask(action) {
@@ -1551,8 +1543,7 @@ Row {
             Item { Layout.fillWidth: true }
 
             // Arm — manual (re-)arm. Issues a real PX4 arm via ROS
-            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM)
-            // and also arms directly over MAVLink for redundancy.
+            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM).
             //
             // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
             // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
@@ -1578,15 +1569,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("ARM")
-                        if (_activeVehicle) {
-                            _activeVehicle.armed = true
-                        }
-                        root.isArmed = true
                     }
                 }
             }
 
-            // Hold Position — publishes ROS command and switches PX4/QGC to Hold
+            // Hold Position — ROS commands PX4 Auto Loiter and stops Offboard.
             Rectangle {
                 width: holdLbl.width + 28; height: 38; color: _clrCard; radius: 6; border.color: _clrMuted; border.width: 1
                 Row {
@@ -1598,14 +1585,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("HOLD_POSITION")
-                        if (_activeVehicle) {
-                            _activeVehicle.flightMode = _activeVehicle.pauseFlightMode || "Hold"
-                        }
                     }
                 }
             }
 
-            // Land Mission — publishes ROS command and asks PX4/QGC for guided land
+            // Land Mission — ROS sends PX4 NAV_LAND.
             Rectangle {
                 width: landMissionLbl.width + 28; height: 38; color: _clrOrange; radius: 6
                 Row {
@@ -1617,14 +1601,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("LAND_MISSION")
-                        if (_activeVehicle) {
-                            _activeVehicle.guidedModeLand()
-                        }
                     }
                 }
             }
 
-            // Return to Home — commands guidedModeRTL (demo reset is the COMPLETE DEMO button)
+            // Return to Home — ROS sends PX4 RTL (demo reset is the COMPLETE DEMO button)
             Rectangle {
                 width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
@@ -1636,9 +1617,6 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("RETURN_HOME")
-                        if (_activeVehicle) {
-                            _activeVehicle.guidedModeRTL(false)
-                        }
                     }
                 }
             }
