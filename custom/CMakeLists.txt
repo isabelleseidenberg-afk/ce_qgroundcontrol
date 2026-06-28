@@ -2,10 +2,13 @@ message(STATUS "QGC: Adding Crown & Eagle Engineering Custom Plugin")
 # ============================================================================
 # Custom Resources
 # ============================================================================
-list(APPEND CUSTOM_RESOURCES
+set(CUSTOM_RESOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/custom.qrc
+    CACHE INTERNAL "" FORCE
 )
-set(QGC_RESOURCES ${QGC_RESOURCES} ${CUSTOM_RESOURCES} CACHE STRING "Paths to .qrc Resources" FORCE)
+set(QGC_RESOURCES ${QGC_RESOURCES} ${CUSTOM_RESOURCES})
+list(REMOVE_DUPLICATES QGC_RESOURCES)
+set(QGC_RESOURCES ${QGC_RESOURCES} PARENT_SCOPE)
 # ============================================================================
 # Custom Plugin Sources
 # ============================================================================

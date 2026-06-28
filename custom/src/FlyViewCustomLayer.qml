@@ -332,6 +332,31 @@ Item {
         return roundSpec && roundSpec.territory ? roundSpec.territory : "outfield"
     }
 
+    function selectedSurveyPlanFile() {
+        var territory = selectedTerritory()
+        var roundId = demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId()
+        if (roundId === 4) {
+            return "full_field_from_" + territory + "_enemy.plan"
+        }
+        return "enemy_survey_from_" + territory + ".plan"
+    }
+
+    function selectedSurveyPlanResourcePath() {
+        return ":/Custom/qml/plans/" + selectedSurveyPlanFile()
+    }
+
+    function selectedSurveyPlanFilePath() {
+        return "/home/izzy/Desktop/CrownEagle/ce_lcp/qgc-interface/scripts/plans/" + selectedSurveyPlanFile()
+    }
+
+    function displaySelectedSurveyPlan() {
+        if (_planMasterController) {
+            var path = selectedSurveyPlanFilePath()
+            console.log("Loading C&E survey plan:", path)
+            _planMasterController.loadFromFile(path)
+        }
+    }
+
     function roundConfigMessage() {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
@@ -347,6 +372,7 @@ Item {
             geofence_plan_file: roundSpec.geofenceFilePath,
             geofence_height_ft: 30,
             camera_mode: cameraMode,
+            survey_plan_file: selectedSurveyPlanFile(),
             demo_name: demoLocked ? root.demoNames[selectedDemoIndex] : "",
             assets: assetList()
         }
@@ -360,7 +386,9 @@ Item {
         }
         if (!root._bridgeClient.sendJsonMessage(roundConfigMessage())) {
             root.bridgeSendStatus = "Send failed"
+            return
         }
+        root.displaySelectedSurveyPlan()
     }
 
     function deploySelectedGeofence() {
@@ -488,9 +516,17 @@ Item {
     }
 
     function loadSelectedMissionTask() {
-        var payload = { task_name: selectedTaskName }
+        var payload = {
+            task_name: selectedTaskName,
+            round_id: demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId(),
+            territory: selectedTerritory()
+        }
         if (selectedGripperAction !== "") {
             payload.gripper_action = selectedGripperAction
+        }
+        if (selectedTaskName === "SURVEY_FOR_ASSET") {
+            payload.survey_plan_file = selectedSurveyPlanFile()
+            root.displaySelectedSurveyPlan()
         }
         root.sendMissionCommand("RUN_TASK", payload)
         if (selectedTaskName === "TAKEOFF" && _activeVehicle) {

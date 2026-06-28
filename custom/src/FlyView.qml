@@ -108,6 +108,13 @@ Item {
             pipView:    _pipView
         }
 
+        PlanMapItems {
+            map:                    mapControl
+            largeMapView:           _mainWindowIsMap
+            planMasterController:   _planController
+            vehicle:                _activeVehicle
+        }
+
         PipView {
             id:                     _pipView
             anchors.left:           parent.left
