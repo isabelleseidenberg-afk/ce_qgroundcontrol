@@ -500,7 +500,15 @@ Item {
         var assetIndex = status.current_asset_index || 0
         var assetTotal = status.total_asset_count || 0
         missionAssetDisplay = "Asset " + assetIndex + "/" + assetTotal
-        missionStatusText = status.status_text || status.last_failure_reason || missionStatusText
+        var px4Reason = ""
+        if (status.px4_control_ready === false && status.px4_control_ready_reason) {
+            px4Reason = "PX4: " + status.px4_control_ready_reason
+        }
+        if (px4Reason !== "" && (missionTaskDisplay === "TAKEOFF" || missionTaskDisplay === "SURVEY_FOR_ASSET" || missionTaskDisplay === "GO_TO_WAYPOINT")) {
+            missionStatusText = px4Reason
+        } else {
+            missionStatusText = status.status_text || status.last_failure_reason || px4Reason || missionStatusText
+        }
     }
 
     function selectedMissionRoundId() {
@@ -545,10 +553,11 @@ Item {
 
     function updateLocalMissionStatus(commandName, taskName) {
         if (commandName === "START_AUTO") {
-            missionModeDisplay = "AUTO_SEQUENCE"
-            missionTaskDisplay = "PRECHECK"
+            selectedMissionMode = "MANUAL_STEP"
+            missionModeDisplay = "MANUAL_STEP"
+            missionTaskDisplay = "IDLE"
             missionAssetDisplay = selectedMissionRoundId() === 3 ? "Asset 1/3" : "Asset 1/1"
-            missionStatusText = "Auto start sent"
+            missionStatusText = "Autonomy enabled; manual step ready"
             return
         }
         if (commandName === "SET_MODE") {
