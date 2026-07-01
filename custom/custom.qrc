@@ -11,5 +11,6 @@
         <file alias="plans/full_field_from_bases_enemy.plan">res/plans/full_field_from_bases_enemy.plan</file>
         <file alias="plans/enemy_survey_from_outfield.plan">res/plans/enemy_survey_from_outfield.plan</file>
         <file alias="plans/enemy_survey_from_bases.plan">res/plans/enemy_survey_from_bases.plan</file>
+        <file alias="points/demo4_asset_points.yaml">res/points/demo4_asset_points.yaml</file>
     </qresource>
 </RCC>

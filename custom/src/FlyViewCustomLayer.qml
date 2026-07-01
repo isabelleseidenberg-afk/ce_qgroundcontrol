@@ -146,6 +146,13 @@ Item {
     property string missionAssetDisplay: "Asset 0/0"
     property string missionStatusText: "Waiting for operator command"
 
+    // Enemy-territory warning popup (top-center, operator-dismissible). Re-pops on
+    // every fresh entry: the ROS geofence monitor bumps event_id on each out->in
+    // crossing, so a new id re-shows the popup even after the operator dismissed it.
+    property bool   territoryAlertVisible: false
+    property string territoryAlertText:    ""
+    property int    territoryAlertEventId:  -1
+
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
@@ -269,6 +276,67 @@ Item {
         selectedDemoIndex = index
         selectedMissionRoundIndex = index
         demoLocked        = true
+        // Points Round: populate the scoring table from the default YAML the first
+        // time it is opened. The operator can reload / point at their own file.
+        if (index === 3 && demo4PointsModel.count === 0) {
+            root.loadDemo4Points(root.demo4PointsPath)
+        }
+    }
+
+    // Parse a flat-mapping YAML scoring table: lines of "<Color> <Shape>: <points>"
+    // (colorless specials use just "<Shape>"). Comments (#), blank lines and a
+    // leading "- " list marker are tolerated. Returns [{label, color, shape, points}].
+    // Note: QML has no real YAML parser, so the file must use this flat format.
+    function parsePointsYaml(text) {
+        var out = []
+        var lines = text.split(/\r?\n/)
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i]
+            var hash = line.indexOf("#")
+            if (hash !== -1) line = line.substring(0, hash)  // strip comment
+            line = line.trim()
+            if (line.length === 0) continue
+            if (line.charAt(0) === "-") line = line.substring(1).trim()  // list marker
+            var colon = line.indexOf(":")
+            if (colon === -1) continue
+            var key = line.substring(0, colon).trim().replace(/^['"]|['"]$/g, "")
+            var pts = parseInt(line.substring(colon + 1).trim())
+            if (key.length === 0 || isNaN(pts)) continue   // skips wrapper keys like "assets:"
+            var parts = key.split(" ")
+            var color = ""
+            var shape = key
+            if (parts.length >= 2 && root.colorOptions.indexOf(parts[0]) !== -1) {
+                color = parts[0]
+                shape = parts.slice(1).join(" ")
+            }
+            out.push({ label: key, color: color, shape: shape, points: pts })
+        }
+        return out
+    }
+
+    // Load a YAML scoring table from a Qt resource (":/…"), an absolute path, or a
+    // URL, and populate demo4PointsModel.
+    function loadDemo4Points(path) {
+        var url = path
+        if (path.charAt(0) === ":")       url = "qrc" + path
+        else if (path.charAt(0) === "/")  url = "file://" + path
+        try {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", url, false)   // synchronous read; files are small
+            xhr.send()
+            var entries = root.parsePointsYaml(xhr.responseText || "")
+            demo4PointsModel.clear()
+            for (var i = 0; i < entries.length; i++) demo4PointsModel.append(entries[i])
+            root.demo4PointsLoaded = entries.length > 0
+            root.demo4PointsStatus = entries.length > 0
+                ? ("Loaded " + entries.length + " assets")
+                : "No asset values found in file"
+        } catch (err) {
+            demo4PointsModel.clear()
+            root.demo4PointsLoaded = false
+            root.demo4PointsStatus = "Load failed — check the path"
+            console.warn("loadDemo4Points failed for", url, err)
+        }
     }
 
     function unlockDemo() {
@@ -283,15 +351,40 @@ Item {
         assetModel.clear()
     }
 
+    // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
+    // opponent battleship position, in list order. Return all three to sink them.
+    // Shared by the asset row UI and the round_config payload so they never diverge.
+    function battleshipReturnLabel(index) {
+        return "Return to opponent battleship position " + (index + 1)
+    }
+
     function assetList() {
+        // Demo #4 (Points Round): the asset catalog is the loaded YAML scoring
+        // table, not a hand-built list. Send every possible asset + its point value
+        // so CV / route planning in ce_lcp can maximize the points collected.
+        if (selectedDemoIndex === 3) {
+            var catalog = []
+            for (var k = 0; k < demo4PointsModel.count; k++) {
+                var e = demo4PointsModel.get(k)
+                catalog.push({ color: e.color, shape: e.shape, points: e.points, label: e.label })
+            }
+            return catalog
+        }
         var assets = []
         for (var i = 0; i < assetModel.count; i++) {
             var asset = assetModel.get(i)
-            assets.push({
+            var entry = {
                 color: asset.assetColor,
                 shape: asset.assetShape,
                 points: asset.points
-            })
+            }
+            // Battleship round: tag each asset with its 1-based return position and
+            // human label so the ce_lcp ROS node knows where to return it.
+            if (selectedDemoIndex === 2) {
+                entry.battleship_position = i + 1
+                entry.return_label = root.battleshipReturnLabel(i)
+            }
+            assets.push(entry)
         }
         return assets
     }
@@ -357,6 +450,31 @@ Item {
         }
     }
 
+    // Read the ENEMY sub-geofence (the "inclusion: false" exclusion polygon) out of
+    // a geofence .plan resource so the ROS geofence monitor tracks the exact fence
+    // QGC deploys. Returns [[lat, lon], ...] (empty if not found). Keeping the .plan
+    // the single source of truth means editing it updates both the map and the
+    // monitor — no drifting copy of coordinates.
+    function enemyGeofenceFromPlan(resourcePath) {
+        if (!resourcePath) return []
+        var url = resourcePath.charAt(0) === ":" ? "qrc" + resourcePath : resourcePath
+        try {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", url, false)   // synchronous read of a bundled resource
+            xhr.send()
+            var plan = JSON.parse(xhr.responseText)
+            var polys = (plan.geoFence && plan.geoFence.polygons) ? plan.geoFence.polygons : []
+            for (var i = 0; i < polys.length; i++) {
+                if (polys[i].inclusion === false && polys[i].polygon && polys[i].polygon.length >= 3) {
+                    return polys[i].polygon
+                }
+            }
+        } catch (err) {
+            console.warn("enemyGeofenceFromPlan failed for", resourcePath, err)
+        }
+        return []
+    }
+
     function roundConfigMessage() {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
@@ -370,6 +488,7 @@ Item {
             fob_coordinates: roundSpec.ceFobCoordinates,
             geofence_label: roundSpec.label,
             geofence_plan_file: roundSpec.geofenceFilePath,
+            enemy_geofence: enemyGeofenceFromPlan(roundSpec.geofenceFilePath),
             geofence_height_ft: 30,
             camera_mode: cameraMode,
             survey_plan_file: selectedSurveyPlanFile(),
@@ -492,6 +611,10 @@ Item {
             missionStatusText = jsonText
             return
         }
+        if (status && status.type === "territory_alert") {
+            root.handleTerritoryAlert(status)
+            return
+        }
         if (!status || status.type !== "mission_status") {
             return
         }
@@ -509,6 +632,24 @@ Item {
         } else {
             missionStatusText = status.status_text || status.last_failure_reason || px4Reason || missionStatusText
         }
+    }
+
+    // territory_alert from the ROS geofence monitor. state="enter" shows the popup
+    // (re-showing on each new event_id even if previously dismissed); state="exit"
+    // auto-dismisses it.
+    function handleTerritoryAlert(status) {
+        if (status.state === "exit") {
+            root.territoryAlertVisible = false
+            return
+        }
+        // state === "enter": only (re)show on a genuinely new crossing.
+        var eventId = (status.event_id !== undefined) ? status.event_id : (root.territoryAlertEventId + 1)
+        if (eventId === root.territoryAlertEventId) {
+            return
+        }
+        root.territoryAlertEventId = eventId
+        root.territoryAlertText     = status.message || "WARNING: Entered enemy territory"
+        root.territoryAlertVisible  = true
     }
 
     function selectedMissionRoundId() {
@@ -631,6 +772,16 @@ Item {
     // DATA MODELS
     // ─────────────────────────────────────────────────────────────────────
     ListModel { id: assetModel }
+
+    // Demo #4 (Points Round) scoring table, loaded from a YAML file. Each row:
+    // { label, color, shape, points }. This replaces the old per-asset manual
+    // points entry so the customer can change scoring on the fly by editing the
+    // YAML instead of re-typing values.
+    ListModel { id: demo4PointsModel }
+    readonly property string _demo4DefaultPointsPath: ":/Custom/qml/points/demo4_asset_points.yaml"
+    property string demo4PointsPath:   _demo4DefaultPointsPath
+    property bool   demo4PointsLoaded:  false
+    property string demo4PointsStatus:  ""
 
     Component.onCompleted: showTemporaryMapOverlays()
     Component.onDestruction: clearTemporaryMapOverlays()
@@ -1060,11 +1211,11 @@ Item {
                 }
             }
 
-            // Demo #3 & #4
+            // Demo #3 (Battleship) — add up to 3 assets, one per battleship position.
             Column {
                 Layout.fillWidth: true; spacing: 8
-                visible: demoLocked && (selectedDemoIndex === 2 || selectedDemoIndex === 3)
-                Text { text: "Add Asset (max 3)"; color: _clrMuted; font.pixelSize: 11 }
+                visible: demoLocked && selectedDemoIndex === 2
+                Text { text: "Add Asset (battleship positions, max 3)"; color: _clrMuted; font.pixelSize: 11 }
                 Row {
                     spacing: 6
                     ComboBox {
@@ -1104,23 +1255,8 @@ Item {
                             contentItem: Text { text: modelData; color: "white"; font.pixelSize: 11; leftPadding: 6; verticalAlignment: Text.AlignVCenter }
                         }
                     }
-                    // Operator-entered points for this asset (Demo #4 only).
-                    // The customer supplies values on the day, so they are typed in.
-                    TextField {
-                        id: assetPointsField
-                        visible: selectedDemoIndex === 3
-                        width: 44; height: 28
-                        placeholderText: "pts"
-                        color: "white"; font.pixelSize: 11
-                        horizontalAlignment: TextInput.AlignHCenter
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        validator: IntValidator { bottom: 0; top: 9999 }
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                    }
                     Rectangle {
-                        // Demo #4 requires a points value before an asset can be added.
-                        property bool _canAdd: assetModel.count < 3
-                                               && (selectedDemoIndex !== 3 || assetPointsField.text.length > 0)
+                        property bool _canAdd: assetModel.count < 3   // exactly 3 battleship positions
                         width: 30; height: 28
                         color: _canAdd ? _clrGreen : "#555"; radius: 4
                         Text { anchors.centerIn: parent; text: "+"; color: "white"; font.pixelSize: 18; font.bold: true }
@@ -1128,10 +1264,8 @@ Item {
                             anchors.fill: parent
                             enabled: parent._canAdd
                             onClicked: {
-                                var pts = parseInt(assetPointsField.text) || 0
                                 var clr = root.isColorlessShape(root.pendingShape) ? "" : root.pendingColor
-                                assetModel.append({ assetColor: clr, assetShape: root.pendingShape, points: pts })
-                                assetPointsField.text = ""
+                                assetModel.append({ assetColor: clr, assetShape: root.pendingShape, points: 0 })
                             }
                         }
                     }
@@ -1141,9 +1275,21 @@ Item {
                     Repeater {
                         model: assetModel
                         delegate: Rectangle {
-                            width: 236; height: 30; color: _clrCard; radius: 4
-                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape; color: "white"; font.pixelSize: 11 }
-                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.right: removeBtn.left; anchors.rightMargin: 8; visible: selectedDemoIndex === 3; text: model.points + " pts"; color: _clrGreen; font.pixelSize: 11 }
+                            width: 236; height: 46; color: _clrCard; radius: 4
+                            Text {
+                                anchors.left: parent.left; anchors.leftMargin: 10
+                                anchors.top: parent.top; anchors.topMargin: 5
+                                text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape
+                                color: "white"; font.pixelSize: 11
+                            }
+                            // Per-asset return instruction. List order = the position.
+                            Text {
+                                anchors.left: parent.left; anchors.leftMargin: 10
+                                anchors.right: removeBtn.left; anchors.rightMargin: 8
+                                anchors.bottom: parent.bottom; anchors.bottomMargin: 5
+                                text: root.battleshipReturnLabel(index)
+                                color: _clrAmber; font.pixelSize: 10; elide: Text.ElideRight
+                            }
                             Rectangle {
                                 id: removeBtn; anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
                                 width: 20; height: 20; color: _clrKill; radius: 3
@@ -1153,17 +1299,80 @@ Item {
                         }
                     }
                 }
-                Rectangle {
-                    width: 236; height: 32; color: _clrCard; radius: 4
-                    visible: selectedDemoIndex === 3 && assetModel.count > 0
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; spacing: 8
-                        Text { text: "Total Points:"; color: _clrMuted; font.pixelSize: 12 }
-                        Text {
-                            color: _clrGreen; font.pixelSize: 14; font.bold: true
-                            text: { var sum = 0; for (var i = 0; i < assetModel.count; i++) sum += assetModel.get(i).points; return sum }
+            }
+
+            // Demo #4 (Points Round) — asset point values loaded from a YAML scoring
+            // table instead of typed per asset. Editing the YAML lets the customer
+            // change scoring on the fly; every possible asset is listed with its value
+            // and the whole table is sent to ce_lcp for CV / route planning.
+            Column {
+                Layout.fillWidth: true; spacing: 8
+                visible: demoLocked && selectedDemoIndex === 3
+                Text { text: "Asset Point Values (YAML)"; color: _clrMuted; font.pixelSize: 11 }
+                Row {
+                    spacing: 6
+                    TextField {
+                        id: demo4PathField
+                        width: 176; height: 28
+                        text: root.demo4PointsPath
+                        color: "white"; font.pixelSize: 10
+                        placeholderText: "path to points .yaml"
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                    }
+                    Rectangle {
+                        width: 54; height: 28; radius: 4; color: _clrGreen
+                        Text { anchors.centerIn: parent; text: "Load"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                root.demo4PointsPath = demo4PathField.text
+                                root.loadDemo4Points(demo4PathField.text)
+                            }
                         }
                     }
+                }
+                Text {
+                    visible: root.demo4PointsStatus.length > 0
+                    text: root.demo4PointsStatus
+                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
+                    font.pixelSize: 10
+                }
+                // Dropdown: press to browse every asset/color combo and its point value.
+                ComboBox {
+                    id: demo4PointsDropdown
+                    width: 236
+                    model: demo4PointsModel
+                    enabled: demo4PointsModel.count > 0
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        leftPadding: 8; verticalAlignment: Text.AlignVCenter
+                        color: "white"; font.pixelSize: 11
+                        text: {
+                            if (demo4PointsModel.count === 0) return "No values loaded"
+                            var e = demo4PointsModel.get(demo4PointsDropdown.currentIndex)
+                            return e ? (e.label + " — " + e.points + " pt") : ""
+                        }
+                    }
+                    popup: Popup {
+                        y: demo4PointsDropdown.height; width: demo4PointsDropdown.width; padding: 1
+                        implicitHeight: Math.min(contentItem.implicitHeight, 240)
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: demo4PointsDropdown.delegateModel; ScrollBar.vertical: ScrollBar {} }
+                    }
+                    delegate: ItemDelegate {
+                        width: demo4PointsDropdown.width; highlighted: demo4PointsDropdown.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
+                        contentItem: Row {
+                            spacing: 8; leftPadding: 8
+                            Text { width: 150; text: model.label; color: "white"; font.pixelSize: 11; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                            Text { text: model.points + " pt"; color: _clrGreen; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
+                        }
+                    }
+                }
+                Text {
+                    visible: demo4PointsModel.count > 0
+                    text: "Total assets: " + demo4PointsModel.count
+                    color: _clrMuted; font.pixelSize: 10
                 }
             }
 
@@ -1734,6 +1943,63 @@ Row {
                         width: infoCol.width - 122; text: modelData.d; color: "white"
                         font.pixelSize: 12; wrapMode: Text.WordWrap
                     }
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ENEMY-TERRITORY WARNING  (top-center, operator-dismissible)
+    // Driven by territory_alert messages from the ROS geofence monitor. Re-pops
+    // on every re-entry (new event_id); the operator can dismiss it with ✕.
+    // ─────────────────────────────────────────────────────────────────────
+    Rectangle {
+        id:                   territoryAlertBanner
+        visible:              root.territoryAlertVisible
+        z:                    2000
+        width:                Math.min(root.width - 24, 460)
+        implicitHeight:       territoryAlertRow.implicitHeight + 20
+        height:               implicitHeight
+        anchors.top:          parent.top
+        anchors.topMargin:    _topBarHeight + 12
+        anchors.horizontalCenter: parent.horizontalCenter
+        color:                "#F21A1206"
+        border.color:         _clrAmber
+        border.width:         2
+        radius:               8
+
+        Row {
+            id:               territoryAlertRow
+            anchors.left:     parent.left
+            anchors.right:    parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins:  12
+            spacing:          10
+
+            Text {
+                text:                   "⚠"
+                color:                  _clrAmber
+                font.pixelSize:         22
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                width:                  parent.width - 60
+                text:                   root.territoryAlertText
+                color:                  "white"
+                font.pixelSize:         15
+                font.bold:              true
+                wrapMode:               Text.WordWrap
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                text:                   "✕"
+                color:                  _clrMuted
+                font.pixelSize:         16
+                anchors.verticalCenter: parent.verticalCenter
+                MouseArea {
+                    anchors.fill:  parent
+                    anchors.margins: -8
+                    onClicked:     root.territoryAlertVisible = false
                 }
             }
         }
