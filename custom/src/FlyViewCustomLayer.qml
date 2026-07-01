@@ -314,29 +314,53 @@ Item {
         return out
     }
 
+    // Built-in scoring catalog (every color/shape combo + colorless specials, 1 pt
+    // each). Used as the guaranteed default so the dropdown always populates even if
+    // the bundled YAML resource can't be read at runtime. Mirrors res/points/
+    // demo4_asset_points.yaml.
+    function defaultDemo4Catalog() {
+        var out = []
+        for (var c = 0; c < colorOptions.length; c++) {
+            for (var s = 0; s < shapeOptions.length; s++) {
+                out.push({ label: colorOptions[c] + " " + shapeOptions[s],
+                           color: colorOptions[c], shape: shapeOptions[s], points: 1 })
+            }
+        }
+        for (var k = 0; k < demo4SpecialShapes.length; k++) {
+            out.push({ label: demo4SpecialShapes[k], color: "",
+                       shape: demo4SpecialShapes[k], points: 1 })
+        }
+        return out
+    }
+
     // Load a YAML scoring table from a Qt resource (":/…"), an absolute path, or a
     // URL, and populate demo4PointsModel.
     function loadDemo4Points(path) {
         var url = path
         if (path.charAt(0) === ":")       url = "qrc" + path
         else if (path.charAt(0) === "/")  url = "file://" + path
+        var entries = []
         try {
             var xhr = new XMLHttpRequest()
             xhr.open("GET", url, false)   // synchronous read; files are small
             xhr.send()
-            var entries = root.parsePointsYaml(xhr.responseText || "")
-            demo4PointsModel.clear()
-            for (var i = 0; i < entries.length; i++) demo4PointsModel.append(entries[i])
-            root.demo4PointsLoaded = entries.length > 0
-            root.demo4PointsStatus = entries.length > 0
-                ? ("Loaded " + entries.length + " assets")
-                : "No asset values found in file"
+            entries = root.parsePointsYaml(xhr.responseText || "")
         } catch (err) {
-            demo4PointsModel.clear()
-            root.demo4PointsLoaded = false
-            root.demo4PointsStatus = "Load failed — check the path"
-            console.warn("loadDemo4Points failed for", url, err)
+            console.warn("loadDemo4Points read failed for", url, err)
         }
+        // Guarantee the default path yields the full built-in catalog even if the
+        // bundled resource can't be read from QML at runtime.
+        var usedDefault = false
+        if (entries.length === 0 && path === root._demo4DefaultPointsPath) {
+            entries = root.defaultDemo4Catalog()
+            usedDefault = true
+        }
+        demo4PointsModel.clear()
+        for (var i = 0; i < entries.length; i++) demo4PointsModel.append(entries[i])
+        root.demo4PointsLoaded = entries.length > 0
+        root.demo4PointsStatus = entries.length > 0
+            ? ("Loaded " + entries.length + " assets" + (usedDefault ? " (defaults)" : ""))
+            : "No assets found — check the file path/format"
     }
 
     function unlockDemo() {
@@ -438,13 +462,9 @@ Item {
         return ":/Custom/qml/plans/" + selectedSurveyPlanFile()
     }
 
-    function selectedSurveyPlanFilePath() {
-        return "/home/izzy/Desktop/CrownEagle/ce_lcp/qgc-interface/scripts/plans/" + selectedSurveyPlanFile()
-    }
-
     function displaySelectedSurveyPlan() {
         if (_planMasterController) {
-            var path = selectedSurveyPlanFilePath()
+            var path = selectedSurveyPlanResourcePath()
             console.log("Loading C&E survey plan:", path)
             _planMasterController.loadFromFile(path)
         }
@@ -778,6 +798,15 @@ Item {
     // points entry so the customer can change scoring on the fly by editing the
     // YAML instead of re-typing values.
     ListModel { id: demo4PointsModel }
+    // The DEFAULT path is a Qt resource (":/…") compiled into the QGC binary by
+    // custom.qrc, so editing res/points/demo4_asset_points.yaml on disk has NO effect
+    // until QGC is rebuilt (rcc re-bakes the resource at build time).
+    //
+    // To change scoring WITHOUT a rebuild, the operator does not touch the resource:
+    // they add their own YAML anywhere on disk, type its absolute path into the path
+    // field in the left panel, and click Load. loadDemo4Points() then reads that file
+    // live off disk (file://) every time Load is pressed. So "add a file in + Load" is
+    // the live-edit path; the compiled-in resource is only the guaranteed default.
     readonly property string _demo4DefaultPointsPath: ":/Custom/qml/points/demo4_asset_points.yaml"
     property string demo4PointsPath:   _demo4DefaultPointsPath
     property bool   demo4PointsLoaded:  false
@@ -1069,10 +1098,24 @@ Item {
         width:          _leftPanelWidth
         color:          _clrPanel
 
+        // The sidebar content can be taller than the panel (e.g. Demo #4 adds the
+        // YAML scoring section), so it lives inside a vertical Flickable and scrolls
+        // instead of overflowing off the bottom bar.
+        Flickable {
+            id:                 leftPanelFlick
+            anchors.fill:       parent
+            anchors.margins:    12
+            contentWidth:       width
+            contentHeight:      leftColumn.implicitHeight
+            clip:               true
+            boundsBehavior:     Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
         ColumnLayout {
-            anchors.fill:    parent
-            anchors.margins: 12
-            spacing:         10
+            id:      leftColumn
+            width:   leftPanelFlick.width
+            spacing: 10
 
             // Mission controls
             Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
@@ -1275,20 +1318,18 @@ Item {
                     Repeater {
                         model: assetModel
                         delegate: Rectangle {
-                            width: 236; height: 46; color: _clrCard; radius: 4
+                            width: 236; height: 30; color: _clrCard; radius: 4
+                            // Per-asset return instruction shown on HOVER only, so the
+                            // row stays one line and doesn't push the panel down.
+                            HoverHandler { id: rowHover }
+                            ToolTip.visible: rowHover.hovered
+                            ToolTip.delay:   300
+                            ToolTip.text:    root.battleshipReturnLabel(index)
                             Text {
+                                anchors.verticalCenter: parent.verticalCenter
                                 anchors.left: parent.left; anchors.leftMargin: 10
-                                anchors.top: parent.top; anchors.topMargin: 5
                                 text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape
                                 color: "white"; font.pixelSize: 11
-                            }
-                            // Per-asset return instruction. List order = the position.
-                            Text {
-                                anchors.left: parent.left; anchors.leftMargin: 10
-                                anchors.right: removeBtn.left; anchors.rightMargin: 8
-                                anchors.bottom: parent.bottom; anchors.bottomMargin: 5
-                                text: root.battleshipReturnLabel(index)
-                                color: _clrAmber; font.pixelSize: 10; elide: Text.ElideRight
                             }
                             Rectangle {
                                 id: removeBtn; anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
@@ -1306,7 +1347,7 @@ Item {
             // change scoring on the fly; every possible asset is listed with its value
             // and the whole table is sent to ce_lcp for CV / route planning.
             Column {
-                Layout.fillWidth: true; spacing: 8
+                Layout.fillWidth: true; spacing: 6
                 visible: demoLocked && selectedDemoIndex === 3
                 Text { text: "Asset Point Values (YAML)"; color: _clrMuted; font.pixelSize: 11 }
                 Row {
@@ -1318,6 +1359,11 @@ Item {
                         color: "white"; font.pixelSize: 10
                         placeholderText: "path to points .yaml"
                         background: Rectangle { color: _clrCard; radius: 4 }
+                        // Path is wider than the field; show the full value on hover.
+                        hoverEnabled:    true
+                        ToolTip.visible: hovered && text.length > 0
+                        ToolTip.delay:   300
+                        ToolTip.text:    text
                     }
                     Rectangle {
                         width: 54; height: 28; radius: 4; color: _clrGreen
@@ -1331,27 +1377,25 @@ Item {
                         }
                     }
                 }
-                Text {
-                    visible: root.demo4PointsStatus.length > 0
-                    text: root.demo4PointsStatus
-                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
-                    font.pixelSize: 10
-                }
-                // Dropdown: press to browse every asset/color combo and its point value.
+                // Reference-only dropdown: press to browse every asset/color combo and
+                // its point value. This is purely for operator awareness — picking a row
+                // does NOT select an asset, so the closed field always shows the same
+                // browse prompt rather than reflecting a "selection".
                 ComboBox {
                     id: demo4PointsDropdown
                     width: 236
+                    implicitHeight: 30
                     model: demo4PointsModel
                     enabled: demo4PointsModel.count > 0
+                    // Keep the field neutral so no row ever looks "chosen".
+                    onActivated: currentIndex = -1
                     background: Rectangle { color: _clrCard; radius: 4 }
                     contentItem: Text {
                         leftPadding: 8; verticalAlignment: Text.AlignVCenter
                         color: "white"; font.pixelSize: 11
-                        text: {
-                            if (demo4PointsModel.count === 0) return "No values loaded"
-                            var e = demo4PointsModel.get(demo4PointsDropdown.currentIndex)
-                            return e ? (e.label + " — " + e.points + " pt") : ""
-                        }
+                        text: demo4PointsModel.count === 0
+                                  ? "No values loaded"
+                                  : "Browse asset point values (" + demo4PointsModel.count + ")"
                     }
                     popup: Popup {
                         y: demo4PointsDropdown.height; width: demo4PointsDropdown.width; padding: 1
@@ -1370,9 +1414,10 @@ Item {
                     }
                 }
                 Text {
-                    visible: demo4PointsModel.count > 0
-                    text: "Total assets: " + demo4PointsModel.count
-                    color: _clrMuted; font.pixelSize: 10
+                    visible: root.demo4PointsStatus.length > 0
+                    text: root.demo4PointsStatus
+                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
+                    font.pixelSize: 10
                 }
             }
 
@@ -1588,6 +1633,7 @@ Row {
                     MouseArea { anchors.fill: parent; onClicked: root.loadSelectedMissionTask() }
                 }
             }
+        }
         }
     }
 
