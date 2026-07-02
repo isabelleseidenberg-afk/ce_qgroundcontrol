@@ -9,6 +9,7 @@
 
 #include "GimbalController.h"
 #include "GimbalControllerSettings.h"
+#include "FirmwarePlugin.h"
 #include "MAVLinkProtocol.h"
 #include "ParameterManager.h"
 #include "QGCLoggingCategory.h"
@@ -29,6 +30,22 @@ GimbalController::GimbalController(Vehicle *vehicle)
 
     _rateSenderTimer.setInterval(500);
     (void) connect(&_rateSenderTimer, &QTimer::timeout, this, &GimbalController::_rateSenderTimeout);
+
+    const GimbalPairId pairId{MAV_COMP_ID_AUTOPILOT1, 1};
+    Gimbal *const gimbal = new Gimbal(this);
+    gimbal->setManagerCompid(pairId.managerCompid);
+    gimbal->setDeviceId(pairId.deviceId);
+    gimbal->_receivedInformation = true;
+    gimbal->_receivedStatus = true;
+    gimbal->_receivedAttitude = true;
+    gimbal->_isComplete = true;
+
+    _potentialGimbals.insert(pairId, gimbal);
+    setActiveGimbal(gimbal);
+    _gimbals->append(gimbal);
+    _vehicle->_addFactGroup(gimbal, QStringLiteral("%1%2%3").arg(_gimbalFactGroupNamePrefix).arg(pairId.managerCompid).arg(pairId.deviceId));
+
+    qWarning() << "CrownEagle forced gimbal UI created manager/device:" << pairId.managerCompid << "/" << pairId.deviceId;
 }
 
 GimbalController::~GimbalController()
@@ -55,6 +72,12 @@ void GimbalController::_mavlinkMessageReceived(const mavlink_message_t &message)
     // Don't proceed until parameters are ready, otherwise the gimbal controller handshake
     // could potentially not work due to the high traffic for parameters, mission download, etc
     if (!_vehicle->parameterManager()->parametersReady()) {
+        if (message.msgid == MAVLINK_MSG_ID_GIMBAL_MANAGER_INFORMATION ||
+            message.msgid == MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS ||
+            message.msgid == MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS) {
+            qCWarning(GimbalControllerLog) << "Ignoring gimbal message before parameters ready, msgid:" << message.msgid
+                                           << "compid:" << message.compid;
+        }
         return;
     }
 
@@ -98,6 +121,9 @@ void GimbalController::_handleGimbalManagerInformation(const mavlink_message_t &
     mavlink_gimbal_manager_information_t information{};
     mavlink_msg_gimbal_manager_information_decode(&message, &information);
 
+    qCWarning(GimbalControllerLog) << "GIMBAL_MANAGER_INFORMATION compid:" << message.compid
+                                     << "device_id:" << information.gimbal_device_id;
+
     if (information.gimbal_device_id == 0) {
         qCWarning(GimbalControllerLog) << "_handleGimbalManagerInformation for invalid gimbal device:"
                              << information.gimbal_device_id << ", from component id:" << message.compid;
@@ -137,8 +163,12 @@ void GimbalController::_handleGimbalManagerStatus(const mavlink_message_t &messa
 
     // qCDebug(GimbalControllerLog) << "_handleGimbalManagerStatus for gimbal device:" << status.gimbal_device_id << ", component id:" << message.compid;
 
+    qCWarning(GimbalControllerLog) << "GIMBAL_MANAGER_STATUS compid:" << message.compid
+                                     << "device_id:" << status.gimbal_device_id
+                                     << "primary:" << status.primary_control_sysid << "/" << status.primary_control_compid;
+
     if (status.gimbal_device_id == 0) {
-        qCDebug(GimbalControllerLog) << "gimbal manager with compId:" << message.compid
+        qCWarning(GimbalControllerLog) << "gimbal manager with compId:" << message.compid
         << "reported status of gimbal device id:" << status.gimbal_device_id << "which is not a valid gimbal device id";
         return;
     }
@@ -194,6 +224,9 @@ void GimbalController::_handleGimbalDeviceAttitudeStatus(const mavlink_message_t
     mavlink_gimbal_device_attitude_status_t attitude_status{};
     mavlink_msg_gimbal_device_attitude_status_decode(&message, &attitude_status);
 
+    qCWarning(GimbalControllerLog) << "GIMBAL_DEVICE_ATTITUDE_STATUS compid:" << message.compid
+                                     << "device_id:" << attitude_status.gimbal_device_id;
+
     GimbalPairId pairId{};
 
     if (attitude_status.gimbal_device_id == 0) {
@@ -212,9 +245,18 @@ void GimbalController::_handleGimbalDeviceAttitudeStatus(const mavlink_message_t
 
         pairId.managerCompid = foundGimbal.key().managerCompid;
     } else if (attitude_status.gimbal_device_id <= 6) {
-         // If the gimbal_device_id field is set to 1-6, we must use this device id instead
+        // Prefer an existing manager/device pair for this device id. PX4 SITL can emit
+        // device attitude from a different component id than manager info/status.
         pairId.deviceId = attitude_status.gimbal_device_id;
-        pairId.managerCompid = message.compid;
+
+        const auto foundGimbal = std::find_if(_potentialGimbals.begin(), _potentialGimbals.end(),
+                     [pairId](Gimbal *gimbal) { return (gimbal->deviceId()->rawValue().toUInt() == pairId.deviceId); });
+
+        if (foundGimbal != _potentialGimbals.constEnd()) {
+            pairId.managerCompid = foundGimbal.key().managerCompid;
+        } else {
+            pairId.managerCompid = message.compid;
+        }
     } else {
         // Otherwise, this is invalid and we don't know how to deal with it.
         qCDebug(GimbalControllerLog) << "_handleGimbalDeviceAttitudeStatus for invalid device id: "
@@ -326,7 +368,10 @@ void GimbalController::_checkComplete(Gimbal &gimbal, GimbalPairId pairId)
     }
 
     if (!gimbal._receivedInformation || !gimbal._receivedStatus || !gimbal._receivedAttitude) {
-        // Not complete yet.
+        qCWarning(GimbalControllerLog) << "Gimbal discovery incomplete manager/device:" << pairId.managerCompid << "/" << pairId.deviceId
+                                       << "info:" << gimbal._receivedInformation
+                                       << "status:" << gimbal._receivedStatus
+                                       << "attitude:" << gimbal._receivedAttitude;
         return;
     }
 
@@ -336,6 +381,8 @@ void GimbalController::_checkComplete(Gimbal &gimbal, GimbalPairId pairId)
     if (!_activeGimbal) {
         setActiveGimbal(&gimbal);
     }
+
+    qCWarning(GimbalControllerLog) << "Gimbal discovery complete manager/device:" << pairId.managerCompid << "/" << pairId.deviceId;
 
     _gimbals->append(&gimbal);
     // This is needed for new Gimbals telemetry to be available for the user to show in flyview telemetry panel

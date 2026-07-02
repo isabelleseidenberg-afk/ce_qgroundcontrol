@@ -21,16 +21,16 @@ import QGroundControl.FactControls
 
 Item {
     id:             control
-    width:          gimbalIndicatorIcon.width * 1.1 + gimbalTelemetryLayout.childrenRect.width + margins
+    width:          Math.max(gimbalIndicatorIcon.width * 1.1 + gimbalTelemetryLayout.childrenRect.width + margins, debugFallbackLabel.width + margins * 2)
     anchors.top:    parent.top
     anchors.bottom: parent.bottom
 
     property var    activeVehicle:              QGroundControl.multiVehicleManager.activeVehicle
-    property var    gimbalController:           activeVehicle.gimbalController
-    property bool   showIndicator:              gimbalController && gimbalController.gimbals.count
-    property var    activeGimbal:               gimbalController.activeGimbal
-    property var    multiGimbalSetup:           gimbalController.gimbals.count > 1
-    property bool   joystickButtonsAvailable:   activeVehicle.joystickEnabled
+    property var    gimbalController:           activeVehicle ? activeVehicle.gimbalController : null
+    property bool   showIndicator:              gimbalController && gimbalController.gimbals && gimbalController.gimbals.count > 0
+    property var    activeGimbal:               gimbalController ? gimbalController.activeGimbal : null
+    property var    multiGimbalSetup:           gimbalController && gimbalController.gimbals ? gimbalController.gimbals.count > 1 : false
+    property bool   joystickButtonsAvailable:   activeVehicle ? activeVehicle.joystickEnabled : false
 
     property var    margins:                    ScreenTools.defaultFontPixelWidth
     property var    panelRadius:                ScreenTools.defaultFontPixelWidth * 0.5
@@ -370,6 +370,14 @@ Item {
         }
     }
 
+    QGCLabel {
+        id:                 debugFallbackLabel
+        text:               qsTr("GIMBAL")
+        visible:            showIndicator && !activeGimbal
+        anchors.centerIn:   parent
+        font.bold:          true
+    }
+
     // Telemetry and status indicator
     GridLayout {
         id:                        gimbalTelemetryLayout
@@ -412,7 +420,7 @@ Item {
         id:                         acquirePopupConnection
         property bool isPopupOpen:  false
         target:                     gimbalController
-        onShowAcquireGimbalControlPopup: {
+        function onShowAcquireGimbalControlPopup() {
             if(!acquirePopupConnection.isPopupOpen){
                 acquirePopupConnection.isPopupOpen = true;
                 mainWindow.showMessageDialog(
