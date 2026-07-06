@@ -19,6 +19,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtLocation
 import QtPositioning
+import QtTextToSpeech
 
 import QGroundControl
 import QGroundControl.Controls
@@ -146,12 +147,19 @@ Item {
     property string missionAssetDisplay: "Asset 0/0"
     property string missionStatusText: "Waiting for operator command"
 
-    // Enemy-territory warning popup (top-center, operator-dismissible). Re-pops on
-    // every fresh entry: the ROS geofence monitor bumps event_id on each out->in
-    // crossing, so a new id re-shows the popup even after the operator dismissed it.
-    property bool   territoryAlertVisible: false
-    property string territoryAlertText:    ""
-    property int    territoryAlertEventId:  -1
+    // Territory status driven by territory_status messages from the geofence monitor.
+    // "undetermined" until FOB side is set via mission specs; then "home" or "enemy".
+    property string territoryStatus: "undetermined"
+    onTerritoryStatusChanged: {
+        if (!_activeVehicle || !_activeVehicle.armed) return
+        if (territoryStatus === "enemy") {
+            _tts.say("Entering enemy territory")
+        } else if (territoryStatus === "home") {
+            _tts.say("Exiting enemy territory")
+        }
+    }
+
+    TextToSpeech { id: _tts }
 
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
@@ -164,6 +172,7 @@ Item {
     ]
 
     property var _arenaOverlay
+    property var _divisionLineOverlay
     property var _fobMarkers: []
     readonly property var roundSpecOptions: [
         {
@@ -551,6 +560,8 @@ Item {
     function clearTemporaryMapOverlays() {
         _clearMapObject(_arenaOverlay)
         _arenaOverlay = null
+        _clearMapObject(_divisionLineOverlay)
+        _divisionLineOverlay = null
         for (var i = 0; i < _fobMarkers.length; i++) {
             _clearMapObject(_fobMarkers[i])
         }
@@ -578,6 +589,9 @@ Item {
             path: _arenaPath
         })
         mapControl.addMapItem(_arenaOverlay)
+
+        _divisionLineOverlay = divisionLineComponent.createObject(mapControl)
+        mapControl.addMapItem(_divisionLineOverlay)
 
         var selectedSpec = roundSpecOptions[selectedRoundSpecIndex]
 
@@ -631,8 +645,8 @@ Item {
             missionStatusText = jsonText
             return
         }
-        if (status && status.type === "territory_alert") {
-            root.handleTerritoryAlert(status)
+        if (status && status.type === "territory_status") {
+            root.territoryStatus = status.status || "undetermined"
             return
         }
         if (!status || status.type !== "mission_status") {
@@ -652,24 +666,6 @@ Item {
         } else {
             missionStatusText = status.status_text || status.last_failure_reason || px4Reason || missionStatusText
         }
-    }
-
-    // territory_alert from the ROS geofence monitor. state="enter" shows the popup
-    // (re-showing on each new event_id even if previously dismissed); state="exit"
-    // auto-dismisses it.
-    function handleTerritoryAlert(status) {
-        if (status.state === "exit") {
-            root.territoryAlertVisible = false
-            return
-        }
-        // state === "enter": only (re)show on a genuinely new crossing.
-        var eventId = (status.event_id !== undefined) ? status.event_id : (root.territoryAlertEventId + 1)
-        if (eventId === root.territoryAlertEventId) {
-            return
-        }
-        root.territoryAlertEventId = eventId
-        root.territoryAlertText     = status.message || "WARNING: Entered enemy territory"
-        root.territoryAlertVisible  = true
     }
 
     function selectedMissionRoundId() {
@@ -828,6 +824,20 @@ Item {
     }
 
     Component {
+        id: divisionLineComponent
+
+        MapPolyline {
+            z: QGroundControl.zOrderMapItems + 11
+            line.color: "white"
+            line.width: 2
+            path: [
+                QtPositioning.coordinate(38.750665, -77.497247),
+                QtPositioning.coordinate(38.750842, -77.496978)
+            ]
+        }
+    }
+
+    Component {
         id: fobMarkerComponent
 
         MapQuickItem {
@@ -972,6 +982,24 @@ Item {
             Row {
                 Layout.preferredHeight: 34
                 spacing: 8
+
+                Rectangle {
+                    width: 118; height: 34
+                    color: territoryStatus === "enemy" ? _clrRed : _clrCard
+                    radius: 5
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "TERRITORY"; color: "white"; opacity: 0.75; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            text: territoryStatus === "enemy" ? "ENEMY" :
+                                  territoryStatus === "home"  ? "HOME"  : "UNKNOWN"
+                            color: territoryStatus === "home"  ? _clrGreen :
+                                   territoryStatus === "enemy" ? "white" : _clrMuted
+                            font.pixelSize: 12; font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                    }
+                }
 
                 Rectangle {
                     width: 118; height: 34; color: _clrCard; radius: 5
@@ -1989,63 +2017,6 @@ Row {
                         width: infoCol.width - 122; text: modelData.d; color: "white"
                         font.pixelSize: 12; wrapMode: Text.WordWrap
                     }
-                }
-            }
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // ENEMY-TERRITORY WARNING  (top-center, operator-dismissible)
-    // Driven by territory_alert messages from the ROS geofence monitor. Re-pops
-    // on every re-entry (new event_id); the operator can dismiss it with ✕.
-    // ─────────────────────────────────────────────────────────────────────
-    Rectangle {
-        id:                   territoryAlertBanner
-        visible:              root.territoryAlertVisible
-        z:                    2000
-        width:                Math.min(root.width - 24, 460)
-        implicitHeight:       territoryAlertRow.implicitHeight + 20
-        height:               implicitHeight
-        anchors.top:          parent.top
-        anchors.topMargin:    _topBarHeight + 12
-        anchors.horizontalCenter: parent.horizontalCenter
-        color:                "#F21A1206"
-        border.color:         _clrAmber
-        border.width:         2
-        radius:               8
-
-        Row {
-            id:               territoryAlertRow
-            anchors.left:     parent.left
-            anchors.right:    parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.margins:  12
-            spacing:          10
-
-            Text {
-                text:                   "⚠"
-                color:                  _clrAmber
-                font.pixelSize:         22
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            Text {
-                width:                  parent.width - 60
-                text:                   root.territoryAlertText
-                color:                  "white"
-                font.pixelSize:         15
-                font.bold:              true
-                wrapMode:               Text.WordWrap
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            Text {
-                text:                   "✕"
-                color:                  _clrMuted
-                font.pixelSize:         16
-                anchors.verticalCenter: parent.verticalCenter
-                MouseArea {
-                    anchors.fill:  parent
-                    anchors.margins: -8
-                    onClicked:     root.territoryAlertVisible = false
                 }
             }
         }
