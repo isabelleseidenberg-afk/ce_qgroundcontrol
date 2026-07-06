@@ -169,23 +169,23 @@ Item {
         {
             label: "Outfield",
             territory: "outfield",
-            ceFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
-            wvxFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
+            ceFobCoordinates: [38.750675, -77.497024, 0],
+            wvxFobCoordinates: [38.750839, -77.497208, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
         },
         {
             label: "Home Base",
             territory: "bases",
-            ceFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
-            wvxFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
+            ceFobCoordinates: [38.750839, -77.497208, 0],
+            wvxFobCoordinates: [38.750675, -77.497024, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
         }
     ]
     readonly property var _arenaPath: [
-        QtPositioning.coordinate(38.7507608625056, -77.49735908548331),
-        QtPositioning.coordinate(38.75094024382851, -77.49709285710168),
-        QtPositioning.coordinate(38.75073132744176, -77.49686508648041),
-        QtPositioning.coordinate(38.750551952470936, -77.49713235890398)
+        QtPositioning.coordinate(38.75077, -77.49736),
+        QtPositioning.coordinate(38.75094645, -77.4970914),
+        QtPositioning.coordinate(38.75073705, -77.49686506),
+        QtPositioning.coordinate(38.7505606, -77.49713366)
     ]
     
 
