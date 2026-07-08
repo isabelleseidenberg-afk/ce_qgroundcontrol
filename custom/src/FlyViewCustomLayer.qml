@@ -146,6 +146,8 @@ Item {
     property string missionTaskDisplay: "IDLE"
     property string missionAssetDisplay: "Asset 0/0"
     property string missionStatusText: "Waiting for operator command"
+    property var pendingAssetMatch: null
+
 
     // Territory status driven by territory_status messages from the geofence monitor.
     // "undetermined" until FOB side is set via mission specs; then "home" or "enemy".
@@ -382,6 +384,7 @@ Item {
         pendingColor      = "Red"
         pendingShape      = "Triangle"
         assetModel.clear()
+        root.clearDisplayedSurveyPlan()
     }
 
     // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
@@ -476,6 +479,13 @@ Item {
             var path = selectedSurveyPlanResourcePath()
             console.log("Loading C&E survey plan:", path)
             _planMasterController.loadFromFile(path)
+        }
+    }
+
+    function clearDisplayedSurveyPlan() {
+        if (_planMasterController) {
+            console.log("Clearing C&E survey plan from map")
+            _planMasterController.removeAll()
         }
     }
 
@@ -649,6 +659,18 @@ Item {
             root.territoryStatus = status.status || "undetermined"
             return
         }
+        if (status && status.type === "asset_match_candidate") {
+            root.showAssetMatchCandidate(status)
+            return
+        }
+        if (status && status.type === "asset_match_resolved") {
+            if (pendingAssetMatch && status.candidate_id === pendingAssetMatch.candidate_id) {
+                pendingAssetMatch = null
+                assetMatchPopup.close()
+            }
+            missionStatusText = status.message || missionStatusText
+            return
+        }
         if (!status || status.type !== "mission_status") {
             return
         }
@@ -671,6 +693,63 @@ Item {
     function selectedMissionRoundId() {
         return selectedMissionRoundIndex + 1
     }
+
+    function candidateConfidenceText(candidate) {
+        if (!candidate || candidate.confidence === undefined || candidate.confidence === null) {
+            return "n/a"
+        }
+        var confidence = Number(candidate.confidence)
+        if (isNaN(confidence)) {
+            return "n/a"
+        }
+        if (confidence <= 1.0) {
+            confidence = confidence * 100.0
+        }
+        return confidence.toFixed(1) + "%"
+    }
+
+    function assetCandidateText(candidate) {
+        if (!candidate) {
+            return "Waiting for candidate"
+        }
+        var parts = []
+        if (candidate.detected_color) parts.push(candidate.detected_color)
+        if (candidate.detected_shape) parts.push(candidate.detected_shape)
+        if (parts.length === 0 && candidate.label) parts.push(candidate.label)
+        return parts.length > 0 ? parts.join(" ") : "unknown"
+    }
+
+    function assetTargetText(candidate) {
+        if (!candidate || !candidate.matched_target) {
+            return "configured target"
+        }
+        return candidate.matched_target.display_label || candidate.matched_target.label || "configured target"
+    }
+
+    function showAssetMatchCandidate(candidate) {
+        pendingAssetMatch = candidate
+        missionModeDisplay = "HOLD"
+        missionStatusText = "Target candidate found"
+        assetMatchPopup.open()
+    }
+
+    function resolveAssetMatchCandidate(approved) {
+        if (!pendingAssetMatch) {
+            return
+        }
+        var candidateId = pendingAssetMatch.candidate_id || ""
+        root.sendMissionCommand("OPERATOR_APPROVAL", {
+            approved: approved,
+            candidate_id: candidateId
+        })
+        if (!approved) {
+            root.sendMissionCommand("RESUME", { candidate_id: candidateId })
+        }
+        missionStatusText = approved ? "Target approved" : "Target rejected"
+        pendingAssetMatch = null
+        assetMatchPopup.close()
+    }
+
 
     function selectMissionTask(taskName, label, gripperAction) {
         selectedTaskName = taskName
@@ -1951,6 +2030,78 @@ Row {
             }
 
             Item { Layout.fillWidth: true }
+        }
+    }
+
+    Popup {
+        id: assetMatchPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        width: 360
+        padding: 0
+        x: Math.max(12, (root.width - width) / 2)
+        y: Math.max(70, (root.height - height) / 2)
+        z: 1200
+        background: Rectangle {
+            color: "#F2111820"
+            border.color: _clrAmber
+            border.width: 1
+            radius: 8
+        }
+        contentItem: Item {
+            implicitWidth: assetMatchPopup.width
+            implicitHeight: assetMatchContent.implicitHeight + 32
+            Column {
+                id: assetMatchContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 16
+                spacing: 10
+
+                Text {
+                    width: parent.width
+                    text: "Target Candidate"
+                    color: "white"
+                    font.pixelSize: 17
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: "Detected: " + root.assetCandidateText(pendingAssetMatch)
+                    color: "white"
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    width: parent.width
+                    text: "Target: " + root.assetTargetText(pendingAssetMatch)
+                    color: _clrMuted
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    width: parent.width
+                    text: "Confidence: " + root.candidateConfidenceText(pendingAssetMatch)
+                    color: _clrAmber
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+                Row {
+                    spacing: 10
+                    Rectangle {
+                        width: 154; height: 34; radius: 4; color: _clrGreen
+                        Text { anchors.centerIn: parent; text: "Confirm"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(true) }
+                    }
+                    Rectangle {
+                        width: 154; height: 34; radius: 4; color: _clrKill
+                        Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(false) }
+                    }
+                }
+            }
         }
     }
 
