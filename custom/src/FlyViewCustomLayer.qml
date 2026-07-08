@@ -144,7 +144,7 @@ Item {
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
-    property string missionAssetDisplay: "Asset 0/0"
+    property string selectedTaskDisplay: "Selected: TAKEOFF"
     property string missionStatusText: "Waiting for operator command"
     property var pendingAssetMatch: null
 
@@ -676,9 +676,6 @@ Item {
         }
         missionModeDisplay = status.current_mission_mode || missionModeDisplay
         missionTaskDisplay = status.current_task || missionTaskDisplay
-        var assetIndex = status.current_asset_index || 0
-        var assetTotal = status.total_asset_count || 0
-        missionAssetDisplay = "Asset " + assetIndex + "/" + assetTotal
         var px4Reason = ""
         if (status.px4_control_ready === false && status.px4_control_ready_reason) {
             px4Reason = "PX4: " + status.px4_control_ready_reason
@@ -754,8 +751,8 @@ Item {
     function selectMissionTask(taskName, label, gripperAction) {
         selectedTaskName = taskName
         selectedTaskLabel = label || taskName
+        selectedTaskDisplay = "Selected: " + selectedTaskLabel
         selectedGripperAction = gripperAction || ""
-        missionTaskDisplay = selectedTaskLabel
         missionStatusText = "Task selected"
     }
 
@@ -779,7 +776,7 @@ Item {
         selectedTaskName = "GRIPPER"
         selectedTaskLabel = action === "OPEN" ? "OPEN GRIPPER" : "CLOSE GRIPPER"
         selectedGripperAction = action
-        missionTaskDisplay = selectedTaskLabel
+        selectedTaskDisplay = "Selected: " + selectedTaskLabel
         missionStatusText = selectedTaskLabel + " sent"
         root.sendMissionCommand("RUN_TASK", {
             task_name: "GRIPPER",
@@ -790,10 +787,11 @@ Item {
     function updateLocalMissionStatus(commandName, taskName) {
         if (commandName === "START_AUTO") {
             selectedMissionMode = "MANUAL_STEP"
+            selectedMissionMode = "MANUAL_STEP"
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = "IDLE"
-            missionAssetDisplay = selectedMissionRoundId() === 3 ? "Asset 1/3" : "Asset 1/1"
-            missionStatusText = "Autonomy enabled; manual step ready"
+            selectedTaskDisplay = "Selected: " + selectedTaskLabel
+            missionStatusText = "Awaiting operator input"
             return
         }
         if (commandName === "SET_MODE") {
@@ -1672,38 +1670,12 @@ Row {
                         anchors.fill: parent; anchors.margins: 8; spacing: 3
                         Text { text: "Mode: " + missionModeDisplay; color: "white"; font.pixelSize: 11; font.bold: true; width: parent.width; elide: Text.ElideRight }
                         Text { text: "Task: " + missionTaskDisplay; color: "white"; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
-                        Text { text: missionAssetDisplay; color: _clrGreen; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
+                        Text { text: selectedTaskDisplay; color: _clrGreen; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
                         Text { text: missionStatusText; color: _clrAmber; font.pixelSize: 10; width: parent.width; elide: Text.ElideRight }
                     }
                 }
 
-                Row {
-                    spacing: 6
-                    visible: missionTaskDisplay === "SURVEY_FOR_ASSET"
-                    Rectangle {
-                        width: 150; height: 28; radius: 4; color: _clrGreen
-                        Text { anchors.centerIn: parent; text: "Approve Target"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: true }) }
-                    }
-                    Rectangle {
-                        width: 80; height: 28; radius: 4; color: _clrKill
-                        Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: false }) }
-                    }
-                }
 
-                Rectangle {
-                    width: 236; height: 30; color: _clrCard; radius: 4
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Task: " + selectedTaskLabel
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                        elide: Text.ElideRight
-                        width: parent.width - 14
-                    }
-                }
 
                 Grid {
                     columns: 2
@@ -2038,10 +2010,10 @@ Row {
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
-        width: 360
+        width: 340
         padding: 0
-        x: Math.max(12, (root.width - width) / 2)
-        y: Math.max(70, (root.height - height) / 2)
+        x: Math.max(12, root.width - _rightPanelWidth - width - 12)
+        y: Math.max(_topBarHeight + 12, root.height - _bottomBarHeight - height - 12)
         z: 1200
         background: Rectangle {
             color: "#F2111820"
@@ -2091,12 +2063,12 @@ Row {
                 Row {
                     spacing: 10
                     Rectangle {
-                        width: 154; height: 34; radius: 4; color: _clrGreen
+                        width: 145; height: 34; radius: 4; color: _clrGreen
                         Text { anchors.centerIn: parent; text: "Confirm"; color: "white"; font.pixelSize: 12; font.bold: true }
                         MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(true) }
                     }
                     Rectangle {
-                        width: 154; height: 34; radius: 4; color: _clrKill
+                        width: 145; height: 34; radius: 4; color: _clrKill
                         Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 12; font.bold: true }
                         MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(false) }
                     }
