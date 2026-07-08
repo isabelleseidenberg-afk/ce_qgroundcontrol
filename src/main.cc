@@ -72,6 +72,15 @@ int WindowsCrtReportHook(int reportType, char* message, int* returnValue)
 
 int main(int argc, char *argv[])
 {
+    // Crown & Eagle: allow QML XMLHttpRequest to read local files (file://). Qt
+    // disables this by default for security, which silently breaks loading an
+    // operator-supplied YAML (e.g. the Demo 4 asset-points table) from disk in the
+    // custom Fly View. Set it before the QML engine starts so no launch-time env var
+    // is required. Only enabled if not already set in the environment.
+    if (!qEnvironmentVariableIsSet("QML_XHR_ALLOW_FILE_READ")) {
+        qputenv("QML_XHR_ALLOW_FILE_READ", "1");
+    }
+
     bool runUnitTests = false;
     bool simpleBootTest = false;
     QString systemIdStr = QString();

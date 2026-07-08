@@ -19,6 +19,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtLocation
 import QtPositioning
+import QtTextToSpeech
 
 import QGroundControl
 import QGroundControl.Controls
@@ -140,17 +141,27 @@ Item {
     property string selectedTaskName: "TAKEOFF"
     property string selectedTaskLabel: "TAKEOFF"
     property string selectedGripperAction: ""
-    property var selectedWaypointCoordinate: null
-    property var selectedDropoffCoordinate: null
-    property var selectedWaypointMarker: null
-    property var selectedDropoffMarker: null
-    // Map double-click drops a single waypoint then asks for confirmation before flying.
-    property bool waypointConfirmVisible: false
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
-    property string missionAssetDisplay: "Asset 0/0"
+    property string selectedTaskDisplay: "Selected: TAKEOFF"
     property string missionStatusText: "Waiting for operator command"
+    property var pendingAssetMatch: null
+
+
+    // Territory status driven by territory_status messages from the geofence monitor.
+    // "undetermined" until FOB side is set via mission specs; then "home" or "enemy".
+    property string territoryStatus: "undetermined"
+    onTerritoryStatusChanged: {
+        if (!_activeVehicle || !_activeVehicle.armed) return
+        if (territoryStatus === "enemy") {
+            _tts.say("Entering enemy territory")
+        } else if (territoryStatus === "home") {
+            _tts.say("Exiting enemy territory")
+        }
+    }
+
+    TextToSpeech { id: _tts }
 
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
@@ -163,28 +174,29 @@ Item {
     ]
 
     property var _arenaOverlay
+    property var _divisionLineOverlay
     property var _fobMarkers: []
-    property var _missionMarkers: []
-
     readonly property var roundSpecOptions: [
         {
             label: "Outfield",
-            ceFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
-            wvxFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
+            territory: "outfield",
+            ceFobCoordinates: [38.750675, -77.497024, 0],
+            wvxFobCoordinates: [38.750839, -77.497208, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
         },
         {
             label: "Home Base",
-            ceFobCoordinates: [38.75084010396389, -77.49721463637287, 0],
-            wvxFobCoordinates: [38.75065209603611, -77.49701011362711, 0],
+            territory: "bases",
+            ceFobCoordinates: [38.750839, -77.497208, 0],
+            wvxFobCoordinates: [38.750675, -77.497024, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
         }
     ]
     readonly property var _arenaPath: [
-        QtPositioning.coordinate(38.7507608625056, -77.49735908548331),
-        QtPositioning.coordinate(38.75094024382851, -77.49709285710168),
-        QtPositioning.coordinate(38.75073132744176, -77.49686508648041),
-        QtPositioning.coordinate(38.750551952470936, -77.49713235890398)
+        QtPositioning.coordinate(38.75077, -77.49736),
+        QtPositioning.coordinate(38.75094645, -77.4970914),
+        QtPositioning.coordinate(38.75073705, -77.49686506),
+        QtPositioning.coordinate(38.7505606, -77.49713366)
     ]
     
 
@@ -275,6 +287,91 @@ Item {
         selectedDemoIndex = index
         selectedMissionRoundIndex = index
         demoLocked        = true
+        // Points Round: populate the scoring table from the default YAML the first
+        // time it is opened. The operator can reload / point at their own file.
+        if (index === 3 && demo4PointsModel.count === 0) {
+            root.loadDemo4Points(root.demo4PointsPath)
+        }
+    }
+
+    // Parse a flat-mapping YAML scoring table: lines of "<Color> <Shape>: <points>"
+    // (colorless specials use just "<Shape>"). Comments (#), blank lines and a
+    // leading "- " list marker are tolerated. Returns [{label, color, shape, points}].
+    // Note: QML has no real YAML parser, so the file must use this flat format.
+    function parsePointsYaml(text) {
+        var out = []
+        var lines = text.split(/\r?\n/)
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i]
+            var hash = line.indexOf("#")
+            if (hash !== -1) line = line.substring(0, hash)  // strip comment
+            line = line.trim()
+            if (line.length === 0) continue
+            if (line.charAt(0) === "-") line = line.substring(1).trim()  // list marker
+            var colon = line.indexOf(":")
+            if (colon === -1) continue
+            var key = line.substring(0, colon).trim().replace(/^['"]|['"]$/g, "")
+            var pts = parseInt(line.substring(colon + 1).trim())
+            if (key.length === 0 || isNaN(pts)) continue   // skips wrapper keys like "assets:"
+            var parts = key.split(" ")
+            var color = ""
+            var shape = key
+            if (parts.length >= 2 && root.colorOptions.indexOf(parts[0]) !== -1) {
+                color = parts[0]
+                shape = parts.slice(1).join(" ")
+            }
+            out.push({ label: key, color: color, shape: shape, points: pts })
+        }
+        return out
+    }
+
+    // Built-in scoring catalog (every color/shape combo + colorless specials, 1 pt
+    // each). Used as the guaranteed default so the dropdown always populates even if
+    // the bundled YAML resource can't be read at runtime. Mirrors res/points/
+    // demo4_asset_points.yaml.
+    function defaultDemo4Catalog() {
+        var out = []
+        for (var c = 0; c < colorOptions.length; c++) {
+            for (var s = 0; s < shapeOptions.length; s++) {
+                out.push({ label: colorOptions[c] + " " + shapeOptions[s],
+                           color: colorOptions[c], shape: shapeOptions[s], points: 1 })
+            }
+        }
+        for (var k = 0; k < demo4SpecialShapes.length; k++) {
+            out.push({ label: demo4SpecialShapes[k], color: "",
+                       shape: demo4SpecialShapes[k], points: 1 })
+        }
+        return out
+    }
+
+    // Load a YAML scoring table from a Qt resource (":/…"), an absolute path, or a
+    // URL, and populate demo4PointsModel.
+    function loadDemo4Points(path) {
+        var url = path
+        if (path.charAt(0) === ":")       url = "qrc" + path
+        else if (path.charAt(0) === "/")  url = "file://" + path
+        var entries = []
+        try {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", url, false)   // synchronous read; files are small
+            xhr.send()
+            entries = root.parsePointsYaml(xhr.responseText || "")
+        } catch (err) {
+            console.warn("loadDemo4Points read failed for", url, err)
+        }
+        // Guarantee the default path yields the full built-in catalog even if the
+        // bundled resource can't be read from QML at runtime.
+        var usedDefault = false
+        if (entries.length === 0 && path === root._demo4DefaultPointsPath) {
+            entries = root.defaultDemo4Catalog()
+            usedDefault = true
+        }
+        demo4PointsModel.clear()
+        for (var i = 0; i < entries.length; i++) demo4PointsModel.append(entries[i])
+        root.demo4PointsLoaded = entries.length > 0
+        root.demo4PointsStatus = entries.length > 0
+            ? ("Loaded " + entries.length + " assets" + (usedDefault ? " (defaults)" : ""))
+            : "No assets found — check the file path/format"
     }
 
     function unlockDemo() {
@@ -287,17 +384,43 @@ Item {
         pendingColor      = "Red"
         pendingShape      = "Triangle"
         assetModel.clear()
+        root.clearDisplayedSurveyPlan()
+    }
+
+    // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
+    // opponent battleship position, in list order. Return all three to sink them.
+    // Shared by the asset row UI and the round_config payload so they never diverge.
+    function battleshipReturnLabel(index) {
+        return "Return to opponent battleship position " + (index + 1)
     }
 
     function assetList() {
+        // Demo #4 (Points Round): the asset catalog is the loaded YAML scoring
+        // table, not a hand-built list. Send every possible asset + its point value
+        // so CV / route planning in ce_lcp can maximize the points collected.
+        if (selectedDemoIndex === 3) {
+            var catalog = []
+            for (var k = 0; k < demo4PointsModel.count; k++) {
+                var e = demo4PointsModel.get(k)
+                catalog.push({ color: e.color, shape: e.shape, points: e.points, label: e.label })
+            }
+            return catalog
+        }
         var assets = []
         for (var i = 0; i < assetModel.count; i++) {
             var asset = assetModel.get(i)
-            assets.push({
+            var entry = {
                 color: asset.assetColor,
                 shape: asset.assetShape,
                 points: asset.points
-            })
+            }
+            // Battleship round: tag each asset with its 1-based return position and
+            // human label so the ce_lcp ROS node knows where to return it.
+            if (selectedDemoIndex === 2) {
+                entry.battleship_position = i + 1
+                entry.return_label = root.battleshipReturnLabel(i)
+            }
+            assets.push(entry)
         }
         return assets
     }
@@ -333,11 +456,70 @@ Item {
         return "unset"
     }
 
+    function selectedTerritory() {
+        var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
+        return roundSpec && roundSpec.territory ? roundSpec.territory : "outfield"
+    }
+
+    function selectedSurveyPlanFile() {
+        var territory = selectedTerritory()
+        var roundId = demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId()
+        if (roundId === 4) {
+            return "full_field_from_" + territory + "_enemy.plan"
+        }
+        return "enemy_survey_from_" + territory + ".plan"
+    }
+
+    function selectedSurveyPlanResourcePath() {
+        return ":/Custom/qml/plans/" + selectedSurveyPlanFile()
+    }
+
+    function displaySelectedSurveyPlan() {
+        if (_planMasterController) {
+            var path = selectedSurveyPlanResourcePath()
+            console.log("Loading C&E survey plan:", path)
+            _planMasterController.loadFromFile(path)
+        }
+    }
+
+    function clearDisplayedSurveyPlan() {
+        if (_planMasterController) {
+            console.log("Clearing C&E survey plan from map")
+            _planMasterController.removeAll()
+        }
+    }
+
+    // Read the ENEMY sub-geofence (the "inclusion: false" exclusion polygon) out of
+    // a geofence .plan resource so the ROS geofence monitor tracks the exact fence
+    // QGC deploys. Returns [[lat, lon], ...] (empty if not found). Keeping the .plan
+    // the single source of truth means editing it updates both the map and the
+    // monitor — no drifting copy of coordinates.
+    function enemyGeofenceFromPlan(resourcePath) {
+        if (!resourcePath) return []
+        var url = resourcePath.charAt(0) === ":" ? "qrc" + resourcePath : resourcePath
+        try {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", url, false)   // synchronous read of a bundled resource
+            xhr.send()
+            var plan = JSON.parse(xhr.responseText)
+            var polys = (plan.geoFence && plan.geoFence.polygons) ? plan.geoFence.polygons : []
+            for (var i = 0; i < polys.length; i++) {
+                if (polys[i].inclusion === false && polys[i].polygon && polys[i].polygon.length >= 3) {
+                    return polys[i].polygon
+                }
+            }
+        } catch (err) {
+            console.warn("enemyGeofenceFromPlan failed for", resourcePath, err)
+        }
+        return []
+    }
+
     function roundConfigMessage() {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
             type: "round_config",
             round_id: demoLocked ? selectedDemoIndex + 1 : 0,
+            territory: selectedTerritory(),
             target_class: targetClass(),
             asset_color: assetColor(),
             round_spec_label: roundSpec.label,
@@ -345,8 +527,10 @@ Item {
             fob_coordinates: roundSpec.ceFobCoordinates,
             geofence_label: roundSpec.label,
             geofence_plan_file: roundSpec.geofenceFilePath,
+            enemy_geofence: enemyGeofenceFromPlan(roundSpec.geofenceFilePath),
             geofence_height_ft: 30,
             camera_mode: cameraMode,
+            survey_plan_file: selectedSurveyPlanFile(),
             demo_name: demoLocked ? root.demoNames[selectedDemoIndex] : "",
             assets: assetList()
         }
@@ -360,7 +544,9 @@ Item {
         }
         if (!root._bridgeClient.sendJsonMessage(roundConfigMessage())) {
             root.bridgeSendStatus = "Send failed"
+            return
         }
+        root.displaySelectedSurveyPlan()
     }
 
     function deploySelectedGeofence() {
@@ -384,12 +570,12 @@ Item {
     function clearTemporaryMapOverlays() {
         _clearMapObject(_arenaOverlay)
         _arenaOverlay = null
+        _clearMapObject(_divisionLineOverlay)
+        _divisionLineOverlay = null
         for (var i = 0; i < _fobMarkers.length; i++) {
             _clearMapObject(_fobMarkers[i])
         }
         _fobMarkers = []
-        clearMissionLocationMarker("DROP")
-        clearMissionLocationMarker("WP")
     }
 
     function pathCenter(path) {
@@ -413,6 +599,9 @@ Item {
             path: _arenaPath
         })
         mapControl.addMapItem(_arenaOverlay)
+
+        _divisionLineOverlay = divisionLineComponent.createObject(mapControl)
+        mapControl.addMapItem(_divisionLineOverlay)
 
         var selectedSpec = roundSpecOptions[selectedRoundSpecIndex]
 
@@ -466,137 +655,119 @@ Item {
             missionStatusText = jsonText
             return
         }
+        if (status && status.type === "territory_status") {
+            root.territoryStatus = status.status || "undetermined"
+            return
+        }
+        if (status && status.type === "asset_match_candidate") {
+            root.showAssetMatchCandidate(status)
+            return
+        }
+        if (status && status.type === "asset_match_resolved") {
+            if (pendingAssetMatch && status.candidate_id === pendingAssetMatch.candidate_id) {
+                pendingAssetMatch = null
+                assetMatchPopup.close()
+            }
+            missionStatusText = status.message || missionStatusText
+            return
+        }
         if (!status || status.type !== "mission_status") {
             return
         }
         missionModeDisplay = status.current_mission_mode || missionModeDisplay
         missionTaskDisplay = status.current_task || missionTaskDisplay
-        var assetIndex = status.current_asset_index || 0
-        var assetTotal = status.total_asset_count || 0
-        missionAssetDisplay = "Asset " + assetIndex + "/" + assetTotal
-        missionStatusText = status.status_text || status.last_failure_reason || missionStatusText
+        var px4Reason = ""
+        if (status.px4_control_ready === false && status.px4_control_ready_reason) {
+            px4Reason = "PX4: " + status.px4_control_ready_reason
+        }
+        if (px4Reason !== "" && (missionTaskDisplay === "TAKEOFF" || missionTaskDisplay === "SURVEY_FOR_ASSET" || missionTaskDisplay === "GO_TO_WAYPOINT")) {
+            missionStatusText = px4Reason
+        } else {
+            missionStatusText = status.status_text || status.last_failure_reason || px4Reason || missionStatusText
+        }
     }
 
     function selectedMissionRoundId() {
         return selectedMissionRoundIndex + 1
     }
 
-    function coordinatePayload(coord) {
-        if (!coord) return null
-        return {
-            latitude: coord.latitude,
-            longitude: coord.longitude,
-            altitude: coord.altitude
+    function candidateConfidenceText(candidate) {
+        if (!candidate || candidate.confidence === undefined || candidate.confidence === null) {
+            return "n/a"
         }
-    }
-
-    function coordinateText(coord) {
-        if (!coord) return "no map coordinate"
-        return coord.latitude.toFixed(6) + ", " + coord.longitude.toFixed(6)
-    }
-
-    function removeMissionLocationMarkerGraphic(label) {
-        if (label === "DROP") {
-            _clearMapObject(selectedDropoffMarker)
-            selectedDropoffMarker = null
-        } else if (label === "WP") {
-            _clearMapObject(selectedWaypointMarker)
-            selectedWaypointMarker = null
+        var confidence = Number(candidate.confidence)
+        if (isNaN(confidence)) {
+            return "n/a"
         }
-    }
-
-    function clearMissionLocationMarker(label) {
-        removeMissionLocationMarkerGraphic(label)
-        if (label === "DROP") {
-            selectedDropoffCoordinate = null
-        } else if (label === "WP") {
-            selectedWaypointCoordinate = null
-            if (selectedTaskName === "SET_WAYPOINT" || selectedTaskName === "GO_TO_WAYPOINT") {
-                missionStatusText = "Waypoint cleared"
-            }
+        if (confidence <= 1.0) {
+            confidence = confidence * 100.0
         }
+        return confidence.toFixed(1) + "%"
     }
 
-    function showMissionLocationMarker(label, coord) {
-        if (!mapControl || !coord) {
+    function assetCandidateText(candidate) {
+        if (!candidate) {
+            return "Waiting for candidate"
+        }
+        var parts = []
+        if (candidate.detected_color) parts.push(candidate.detected_color)
+        if (candidate.detected_shape) parts.push(candidate.detected_shape)
+        if (parts.length === 0 && candidate.label) parts.push(candidate.label)
+        return parts.length > 0 ? parts.join(" ") : "unknown"
+    }
+
+    function assetTargetText(candidate) {
+        if (!candidate || !candidate.matched_target) {
+            return "configured target"
+        }
+        return candidate.matched_target.display_label || candidate.matched_target.label || "configured target"
+    }
+
+    function showAssetMatchCandidate(candidate) {
+        pendingAssetMatch = candidate
+        missionModeDisplay = "HOLD"
+        missionStatusText = "Target candidate found"
+        assetMatchPopup.open()
+    }
+
+    function resolveAssetMatchCandidate(approved) {
+        if (!pendingAssetMatch) {
             return
         }
-        removeMissionLocationMarkerGraphic(label)
-        var marker = missionLocationMarkerComponent.createObject(mapControl, {
-            coordinate: coord,
-            label: label
+        var candidateId = pendingAssetMatch.candidate_id || ""
+        root.sendMissionCommand("OPERATOR_APPROVAL", {
+            approved: approved,
+            candidate_id: candidateId
         })
-        mapControl.addMapItem(marker)
-        if (label === "DROP") {
-            selectedDropoffMarker = marker
-        } else if (label === "WP") {
-            selectedWaypointMarker = marker
+        if (!approved) {
+            root.sendMissionCommand("RESUME", { candidate_id: candidateId })
         }
+        missionStatusText = approved ? "Target approved" : "Target rejected"
+        pendingAssetMatch = null
+        assetMatchPopup.close()
     }
 
-    function coordinateFromMapPick(mouseArea, mouseX, mouseY) {
-        if (!mapControl || !mapControl.toCoordinate) {
-            return null
-        }
-        var pointOnMap = mapControl.mapFromItem(mouseArea, mouseX, mouseY)
-        return mapControl.toCoordinate(pointOnMap, false)
-    }
-
-    // Left single-click on the map sets/moves a single waypoint marker
-    // (latest-wins). It does NOT fly — double-click opens the confirm popup.
-    function placeWaypointFromMap(coord) {
-        if (!coord) {
-            missionStatusText = "Map pick failed"
-            return
-        }
-        selectedWaypointCoordinate = coord
-        showMissionLocationMarker("WP", coord)
-        missionStatusText = "Waypoint set: " + coordinateText(coord) + " — double-click to fly"
-    }
-
-    // Double-click opens the confirm popup for the placed waypoint.
-    function openWaypointConfirm() {
-        if (!selectedWaypointCoordinate) {
-            missionStatusText = "Click the map to set a waypoint first"
-            return
-        }
-        waypointConfirmVisible = true
-    }
-
-    // Go: route the waypoint through our stack as GO_TO_WAYPOINT
-    // (mission_manager -> px4_control in ce_px4_bridge -> PX4).
-    function confirmGoToWaypoint() {
-        waypointConfirmVisible = false
-        if (!selectedWaypointCoordinate) {
-            return
-        }
-        selectedTaskName = "GO_TO_WAYPOINT"
-        selectedTaskLabel = "GO WAYPOINT"
-        missionTaskDisplay = selectedTaskLabel
-        root.sendMissionCommand("RUN_TASK", {
-            task_name: "GO_TO_WAYPOINT",
-            waypoint_coordinate: coordinatePayload(selectedWaypointCoordinate)
-        })
-        missionStatusText = "Flying to waypoint: " + coordinateText(selectedWaypointCoordinate)
-    }
-
-    function cancelWaypoint() {
-        waypointConfirmVisible = false
-        missionStatusText = "Waypoint flight canceled"
-    }
 
     function selectMissionTask(taskName, label, gripperAction) {
         selectedTaskName = taskName
         selectedTaskLabel = label || taskName
+        selectedTaskDisplay = "Selected: " + selectedTaskLabel
         selectedGripperAction = gripperAction || ""
-        missionTaskDisplay = selectedTaskLabel
         missionStatusText = "Task selected"
     }
 
     function loadSelectedMissionTask() {
-        var payload = { task_name: selectedTaskName }
+        var payload = {
+            task_name: selectedTaskName,
+            round_id: demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId(),
+            territory: selectedTerritory()
+        }
         if (selectedGripperAction !== "") {
             payload.gripper_action = selectedGripperAction
+        }
+        if (selectedTaskName === "SURVEY_FOR_ASSET") {
+            payload.survey_plan_file = selectedSurveyPlanFile()
+            root.displaySelectedSurveyPlan()
         }
         root.sendMissionCommand("RUN_TASK", payload)
     }
@@ -605,7 +776,7 @@ Item {
         selectedTaskName = "GRIPPER"
         selectedTaskLabel = action === "OPEN" ? "OPEN GRIPPER" : "CLOSE GRIPPER"
         selectedGripperAction = action
-        missionTaskDisplay = selectedTaskLabel
+        selectedTaskDisplay = "Selected: " + selectedTaskLabel
         missionStatusText = selectedTaskLabel + " sent"
         root.sendMissionCommand("RUN_TASK", {
             task_name: "GRIPPER",
@@ -615,10 +786,12 @@ Item {
 
     function updateLocalMissionStatus(commandName, taskName) {
         if (commandName === "START_AUTO") {
-            missionModeDisplay = "AUTO_SEQUENCE"
-            missionTaskDisplay = "PRECHECK"
-            missionAssetDisplay = selectedMissionRoundId() === 3 ? "Asset 1/3" : "Asset 1/1"
-            missionStatusText = "Auto start sent"
+            selectedMissionMode = "MANUAL_STEP"
+            selectedMissionMode = "MANUAL_STEP"
+            missionModeDisplay = "MANUAL_STEP"
+            missionTaskDisplay = "IDLE"
+            selectedTaskDisplay = "Selected: " + selectedTaskLabel
+            missionStatusText = "Awaiting operator input"
             return
         }
         if (commandName === "SET_MODE") {
@@ -629,9 +802,7 @@ Item {
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = selectedTaskLabel || taskName
-            if (selectedTaskName !== "GO_TO_WAYPOINT") {
-                missionStatusText = "Task load sent"
-            }
+            missionStatusText = "Task load sent"
             return
         }
         if (commandName === "PAUSE") {
@@ -695,6 +866,25 @@ Item {
     // ─────────────────────────────────────────────────────────────────────
     ListModel { id: assetModel }
 
+    // Demo #4 (Points Round) scoring table, loaded from a YAML file. Each row:
+    // { label, color, shape, points }. This replaces the old per-asset manual
+    // points entry so the customer can change scoring on the fly by editing the
+    // YAML instead of re-typing values.
+    ListModel { id: demo4PointsModel }
+    // The DEFAULT path is a Qt resource (":/…") compiled into the QGC binary by
+    // custom.qrc, so editing res/points/demo4_asset_points.yaml on disk has NO effect
+    // until QGC is rebuilt (rcc re-bakes the resource at build time).
+    //
+    // To change scoring WITHOUT a rebuild, the operator does not touch the resource:
+    // they add their own YAML anywhere on disk, type its absolute path into the path
+    // field in the left panel, and click Load. loadDemo4Points() then reads that file
+    // live off disk (file://) every time Load is pressed. So "add a file in + Load" is
+    // the live-edit path; the compiled-in resource is only the guaranteed default.
+    readonly property string _demo4DefaultPointsPath: ":/Custom/qml/points/demo4_asset_points.yaml"
+    property string demo4PointsPath:   _demo4DefaultPointsPath
+    property bool   demo4PointsLoaded:  false
+    property string demo4PointsStatus:  ""
+
     Component.onCompleted: showTemporaryMapOverlays()
     Component.onDestruction: clearTemporaryMapOverlays()
 
@@ -707,6 +897,20 @@ Item {
             border.width: 3
             color: "#2200c853"
             opacity: 0.85
+        }
+    }
+
+    Component {
+        id: divisionLineComponent
+
+        MapPolyline {
+            z: QGroundControl.zOrderMapItems + 11
+            line.color: "white"
+            line.width: 2
+            path: [
+                QtPositioning.coordinate(38.750665, -77.497247),
+                QtPositioning.coordinate(38.750842, -77.496978)
+            ]
         }
     }
 
@@ -741,52 +945,6 @@ Item {
         }
     }
 
-    Component {
-        id: missionLocationMarkerComponent
-
-        MapQuickItem {
-            property string label: ""
-
-            z: QGroundControl.zOrderMapItems + 25
-            anchorPoint.x: sourceItem.width / 2
-            anchorPoint.y: sourceItem.height
-
-            sourceItem: Rectangle {
-                width: missionLocationLabel.width + removeLocationLabel.width + 28
-                height: 30
-                radius: 5
-                color: "#111820"
-                border.color: _clrAmber
-                border.width: 2
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: 8
-                    Text {
-                        id: missionLocationLabel
-                        text: label
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                    }
-                    Text {
-                        id: removeLocationLabel
-                        text: "x"
-                        color: _clrAmber
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.clearMissionLocationMarker(label)
-                    cursorShape: Qt.PointingHandCursor
-                }
-            }
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────
     // QGC TOOL INSETS
     // ─────────────────────────────────────────────────────────────────────
@@ -804,73 +962,6 @@ Item {
         bottomEdgeLeftInset: _bottomBarHeight
         bottomEdgeCenterInset: _bottomBarHeight
         bottomEdgeRightInset:  _bottomBarHeight
-    }
-
-
-    // Waypoint map input. A TapHandler (not a MouseArea) is used so QGC's native
-    // map pan/zoom stay intact: single left-click sets/moves a single waypoint
-    // marker (latest-wins); double-click opens a confirm popup that flies to it
-    // through our stack (GO_TO_WAYPOINT). DragThreshold yields drags to the map.
-    Item {
-        id: waypointClickLayer
-        anchors.top: topBar.bottom
-        anchors.bottom: bottomBar.top
-        anchors.left: leftPanel.right
-        anchors.right: rightPanel.left
-        z: QGroundControl.zOrderMapItems + 30
-
-        TapHandler {
-            id: waypointTap
-            acceptedButtons: Qt.LeftButton
-            gesturePolicy: TapHandler.DragThreshold
-            onTapped: function(eventPoint) {
-                root.placeWaypointFromMap(
-                    root.coordinateFromMapPick(waypointClickLayer, eventPoint.position.x, eventPoint.position.y))
-                if (waypointTap.tapCount >= 2) {
-                    root.openWaypointConfirm()
-                }
-            }
-        }
-
-        // Confirm-to-fly popup (top-center over the map).
-        Rectangle {
-            id: waypointConfirmBanner
-            visible: root.waypointConfirmVisible
-            anchors.top: parent.top
-            anchors.topMargin: 12
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: confirmRow.width + 24
-            height: 44
-            radius: 6
-            color: "#E6111820"
-            border.color: _clrAmber
-            border.width: 1
-
-            Row {
-                id: confirmRow
-                anchors.centerIn: parent
-                spacing: 10
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Fly to waypoint?"
-                    color: "white"
-                    font.pixelSize: 12
-                    font.bold: true
-                }
-                Rectangle {
-                    width: 58; height: 28; radius: 4; color: _clrGreen
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { anchors.centerIn: parent; text: "Go"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.confirmGoToWaypoint() }
-                }
-                Rectangle {
-                    width: 66; height: 28; radius: 4; color: _clrCard
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { anchors.centerIn: parent; text: "Cancel"; color: "white"; font.pixelSize: 12 }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.cancelWaypoint() }
-                }
-            }
-        }
     }
 
 
@@ -968,6 +1059,24 @@ Item {
             Row {
                 Layout.preferredHeight: 34
                 spacing: 8
+
+                Rectangle {
+                    width: 118; height: 34
+                    color: territoryStatus === "enemy" ? _clrRed : _clrCard
+                    radius: 5
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "TERRITORY"; color: "white"; opacity: 0.75; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            text: territoryStatus === "enemy" ? "ENEMY" :
+                                  territoryStatus === "home"  ? "HOME"  : "UNKNOWN"
+                            color: territoryStatus === "home"  ? _clrGreen :
+                                   territoryStatus === "enemy" ? "white" : _clrMuted
+                            font.pixelSize: 12; font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                    }
+                }
 
                 Rectangle {
                     width: 118; height: 34; color: _clrCard; radius: 5
@@ -1094,10 +1203,24 @@ Item {
         width:          _leftPanelWidth
         color:          _clrPanel
 
+        // The sidebar content can be taller than the panel (e.g. Demo #4 adds the
+        // YAML scoring section), so it lives inside a vertical Flickable and scrolls
+        // instead of overflowing off the bottom bar.
+        Flickable {
+            id:                 leftPanelFlick
+            anchors.fill:       parent
+            anchors.margins:    12
+            contentWidth:       width
+            contentHeight:      leftColumn.implicitHeight
+            clip:               true
+            boundsBehavior:     Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
         ColumnLayout {
-            anchors.fill:    parent
-            anchors.margins: 12
-            spacing:         10
+            id:      leftColumn
+            width:   leftPanelFlick.width
+            spacing: 10
 
             // Mission controls
             Rectangle { Layout.fillWidth: true; height: 1; color: _clrCard }
@@ -1236,11 +1359,11 @@ Item {
                 }
             }
 
-            // Demo #3 & #4
+            // Demo #3 (Battleship) — add up to 3 assets, one per battleship position.
             Column {
                 Layout.fillWidth: true; spacing: 8
-                visible: demoLocked && (selectedDemoIndex === 2 || selectedDemoIndex === 3)
-                Text { text: "Add Asset (max 3)"; color: _clrMuted; font.pixelSize: 11 }
+                visible: demoLocked && selectedDemoIndex === 2
+                Text { text: "Add Asset (battleship positions, max 3)"; color: _clrMuted; font.pixelSize: 11 }
                 Row {
                     spacing: 6
                     ComboBox {
@@ -1280,23 +1403,8 @@ Item {
                             contentItem: Text { text: modelData; color: "white"; font.pixelSize: 11; leftPadding: 6; verticalAlignment: Text.AlignVCenter }
                         }
                     }
-                    // Operator-entered points for this asset (Demo #4 only).
-                    // The customer supplies values on the day, so they are typed in.
-                    TextField {
-                        id: assetPointsField
-                        visible: selectedDemoIndex === 3
-                        width: 44; height: 28
-                        placeholderText: "pts"
-                        color: "white"; font.pixelSize: 11
-                        horizontalAlignment: TextInput.AlignHCenter
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        validator: IntValidator { bottom: 0; top: 9999 }
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                    }
                     Rectangle {
-                        // Demo #4 requires a points value before an asset can be added.
-                        property bool _canAdd: assetModel.count < 3
-                                               && (selectedDemoIndex !== 3 || assetPointsField.text.length > 0)
+                        property bool _canAdd: assetModel.count < 3   // exactly 3 battleship positions
                         width: 30; height: 28
                         color: _canAdd ? _clrGreen : "#555"; radius: 4
                         Text { anchors.centerIn: parent; text: "+"; color: "white"; font.pixelSize: 18; font.bold: true }
@@ -1304,10 +1412,8 @@ Item {
                             anchors.fill: parent
                             enabled: parent._canAdd
                             onClicked: {
-                                var pts = parseInt(assetPointsField.text) || 0
                                 var clr = root.isColorlessShape(root.pendingShape) ? "" : root.pendingColor
-                                assetModel.append({ assetColor: clr, assetShape: root.pendingShape, points: pts })
-                                assetPointsField.text = ""
+                                assetModel.append({ assetColor: clr, assetShape: root.pendingShape, points: 0 })
                             }
                         }
                     }
@@ -1318,8 +1424,18 @@ Item {
                         model: assetModel
                         delegate: Rectangle {
                             width: 236; height: 30; color: _clrCard; radius: 4
-                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape; color: "white"; font.pixelSize: 11 }
-                            Text { anchors.verticalCenter: parent.verticalCenter; anchors.right: removeBtn.left; anchors.rightMargin: 8; visible: selectedDemoIndex === 3; text: model.points + " pts"; color: _clrGreen; font.pixelSize: 11 }
+                            // Per-asset return instruction shown on HOVER only, so the
+                            // row stays one line and doesn't push the panel down.
+                            HoverHandler { id: rowHover }
+                            ToolTip.visible: rowHover.hovered
+                            ToolTip.delay:   300
+                            ToolTip.text:    root.battleshipReturnLabel(index)
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left; anchors.leftMargin: 10
+                                text: model.assetColor ? (model.assetColor + " / " + model.assetShape) : model.assetShape
+                                color: "white"; font.pixelSize: 11
+                            }
                             Rectangle {
                                 id: removeBtn; anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right; anchors.rightMargin: 8
                                 width: 20; height: 20; color: _clrKill; radius: 3
@@ -1329,17 +1445,84 @@ Item {
                         }
                     }
                 }
-                Rectangle {
-                    width: 236; height: 32; color: _clrCard; radius: 4
-                    visible: selectedDemoIndex === 3 && assetModel.count > 0
-                    Row {
-                        anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 10; spacing: 8
-                        Text { text: "Total Points:"; color: _clrMuted; font.pixelSize: 12 }
-                        Text {
-                            color: _clrGreen; font.pixelSize: 14; font.bold: true
-                            text: { var sum = 0; for (var i = 0; i < assetModel.count; i++) sum += assetModel.get(i).points; return sum }
+            }
+
+            // Demo #4 (Points Round) — asset point values loaded from a YAML scoring
+            // table instead of typed per asset. Editing the YAML lets the customer
+            // change scoring on the fly; every possible asset is listed with its value
+            // and the whole table is sent to ce_lcp for CV / route planning.
+            Column {
+                Layout.fillWidth: true; spacing: 6
+                visible: demoLocked && selectedDemoIndex === 3
+                Text { text: "Asset Point Values (YAML)"; color: _clrMuted; font.pixelSize: 11 }
+                Row {
+                    spacing: 6
+                    TextField {
+                        id: demo4PathField
+                        width: 176; height: 28
+                        text: root.demo4PointsPath
+                        color: "white"; font.pixelSize: 10
+                        placeholderText: "path to points .yaml"
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        // Path is wider than the field; show the full value on hover.
+                        hoverEnabled:    true
+                        ToolTip.visible: hovered && text.length > 0
+                        ToolTip.delay:   300
+                        ToolTip.text:    text
+                    }
+                    Rectangle {
+                        width: 54; height: 28; radius: 4; color: _clrGreen
+                        Text { anchors.centerIn: parent; text: "Load"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                root.demo4PointsPath = demo4PathField.text
+                                root.loadDemo4Points(demo4PathField.text)
+                            }
                         }
                     }
+                }
+                // Reference-only dropdown: press to browse every asset/color combo and
+                // its point value. This is purely for operator awareness — picking a row
+                // does NOT select an asset, so the closed field always shows the same
+                // browse prompt rather than reflecting a "selection".
+                ComboBox {
+                    id: demo4PointsDropdown
+                    width: 236
+                    implicitHeight: 30
+                    model: demo4PointsModel
+                    enabled: demo4PointsModel.count > 0
+                    // Keep the field neutral so no row ever looks "chosen".
+                    onActivated: currentIndex = -1
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text {
+                        leftPadding: 8; verticalAlignment: Text.AlignVCenter
+                        color: "white"; font.pixelSize: 11
+                        text: demo4PointsModel.count === 0
+                                  ? "No values loaded"
+                                  : "Browse asset point values (" + demo4PointsModel.count + ")"
+                    }
+                    popup: Popup {
+                        y: demo4PointsDropdown.height; width: demo4PointsDropdown.width; padding: 1
+                        implicitHeight: Math.min(contentItem.implicitHeight, 240)
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: demo4PointsDropdown.delegateModel; ScrollBar.vertical: ScrollBar {} }
+                    }
+                    delegate: ItemDelegate {
+                        width: demo4PointsDropdown.width; highlighted: demo4PointsDropdown.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
+                        contentItem: Row {
+                            spacing: 8; leftPadding: 8
+                            Text { width: 150; text: model.label; color: "white"; font.pixelSize: 11; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                            Text { text: model.points + " pt"; color: _clrGreen; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
+                        }
+                    }
+                }
+                Text {
+                    visible: root.demo4PointsStatus.length > 0
+                    text: root.demo4PointsStatus
+                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
+                    font.pixelSize: 10
                 }
             }
 
@@ -1487,38 +1670,12 @@ Row {
                         anchors.fill: parent; anchors.margins: 8; spacing: 3
                         Text { text: "Mode: " + missionModeDisplay; color: "white"; font.pixelSize: 11; font.bold: true; width: parent.width; elide: Text.ElideRight }
                         Text { text: "Task: " + missionTaskDisplay; color: "white"; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
-                        Text { text: missionAssetDisplay; color: _clrGreen; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
+                        Text { text: selectedTaskDisplay; color: _clrGreen; font.pixelSize: 11; width: parent.width; elide: Text.ElideRight }
                         Text { text: missionStatusText; color: _clrAmber; font.pixelSize: 10; width: parent.width; elide: Text.ElideRight }
                     }
                 }
 
-                Row {
-                    spacing: 6
-                    visible: missionTaskDisplay === "SURVEY_FOR_ASSET"
-                    Rectangle {
-                        width: 150; height: 28; radius: 4; color: _clrGreen
-                        Text { anchors.centerIn: parent; text: "Approve Target"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: true }) }
-                    }
-                    Rectangle {
-                        width: 80; height: 28; radius: 4; color: _clrKill
-                        Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("OPERATOR_APPROVAL", { approved: false }) }
-                    }
-                }
 
-                Rectangle {
-                    width: 236; height: 30; color: _clrCard; radius: 4
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Task: " + selectedTaskLabel
-                        color: "white"
-                        font.pixelSize: 11
-                        font.bold: true
-                        elide: Text.ElideRight
-                        width: parent.width - 14
-                    }
-                }
 
                 Grid {
                     columns: 2
@@ -1555,6 +1712,7 @@ Row {
                     MouseArea { anchors.fill: parent; onClicked: root.loadSelectedMissionTask() }
                 }
             }
+        }
         }
     }
 
@@ -1728,8 +1886,7 @@ Row {
             Item { Layout.fillWidth: true }
 
             // Arm — manual (re-)arm. Issues a real PX4 arm via ROS
-            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM)
-            // and also arms directly over MAVLink for redundancy.
+            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM).
             //
             // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
             // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
@@ -1755,15 +1912,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("ARM")
-                        if (_activeVehicle) {
-                            _activeVehicle.armed = true
-                        }
-                        root.isArmed = true
                     }
                 }
             }
 
-            // Hold Position — publishes ROS command and switches PX4/QGC to Hold
+            // Hold Position — ROS commands PX4 Auto Loiter and stops Offboard.
             Rectangle {
                 width: holdLbl.width + 28; height: 38; color: _clrCard; radius: 6; border.color: _clrMuted; border.width: 1
                 Row {
@@ -1775,14 +1928,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("HOLD_POSITION")
-                        if (_activeVehicle) {
-                            _activeVehicle.flightMode = "Hold"
-                        }
                     }
                 }
             }
 
-            // Land Mission — publishes ROS command and asks PX4/QGC for guided land
+            // Land Mission — ROS sends PX4 NAV_LAND.
             Rectangle {
                 width: landMissionLbl.width + 28; height: 38; color: _clrOrange; radius: 6
                 Row {
@@ -1794,14 +1944,11 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("LAND_MISSION")
-                        if (_activeVehicle) {
-                            _activeVehicle.guidedModeLand()
-                        }
                     }
                 }
             }
 
-            // Return to Home — commands guidedModeRTL (demo reset is the COMPLETE DEMO button)
+            // Return to Home — ROS sends PX4 RTL (demo reset is the COMPLETE DEMO button)
             Rectangle {
                 width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
@@ -1813,9 +1960,6 @@ Row {
                     anchors.fill: parent
                     onClicked: {
                         root.sendMissionCommand("RETURN_HOME")
-                        if (_activeVehicle) {
-                            _activeVehicle.guidedModeRTL(false)
-                        }
                     }
                 }
             }
@@ -1858,6 +2002,78 @@ Row {
             }
 
             Item { Layout.fillWidth: true }
+        }
+    }
+
+    Popup {
+        id: assetMatchPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        width: 340
+        padding: 0
+        x: Math.max(12, root.width - _rightPanelWidth - width - 12)
+        y: Math.max(_topBarHeight + 12, root.height - _bottomBarHeight - height - 12)
+        z: 1200
+        background: Rectangle {
+            color: "#F2111820"
+            border.color: _clrAmber
+            border.width: 1
+            radius: 8
+        }
+        contentItem: Item {
+            implicitWidth: assetMatchPopup.width
+            implicitHeight: assetMatchContent.implicitHeight + 32
+            Column {
+                id: assetMatchContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 16
+                spacing: 10
+
+                Text {
+                    width: parent.width
+                    text: "Target Candidate"
+                    color: "white"
+                    font.pixelSize: 17
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    text: "Detected: " + root.assetCandidateText(pendingAssetMatch)
+                    color: "white"
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    width: parent.width
+                    text: "Target: " + root.assetTargetText(pendingAssetMatch)
+                    color: _clrMuted
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    width: parent.width
+                    text: "Confidence: " + root.candidateConfidenceText(pendingAssetMatch)
+                    color: _clrAmber
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+                Row {
+                    spacing: 10
+                    Rectangle {
+                        width: 145; height: 34; radius: 4; color: _clrGreen
+                        Text { anchors.centerIn: parent; text: "Confirm"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(true) }
+                    }
+                    Rectangle {
+                        width: 145; height: 34; radius: 4; color: _clrKill
+                        Text { anchors.centerIn: parent; text: "Reject"; color: "white"; font.pixelSize: 12; font.bold: true }
+                        MouseArea { anchors.fill: parent; onClicked: root.resolveAssetMatchCandidate(false) }
+                    }
+                }
+            }
         }
     }
 

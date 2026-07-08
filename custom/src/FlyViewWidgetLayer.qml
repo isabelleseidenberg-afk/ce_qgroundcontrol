@@ -34,6 +34,8 @@ import QGroundControl.Vehicle
 Item {
     id: _root
 
+    QGCPalette { id: qgcPal; colorGroupEnabled: enabled }
+
     property var    parentToolInsets
     property var    totalToolInsets:        _totalToolInsets
     property var    mapControl
@@ -61,6 +63,7 @@ Item {
     readonly property real _ceRightPanel: 260
     readonly property real _ceTopBar:     44
     readonly property real _ceBottomBar:  56
+    readonly property real _ceGimbalIndicatorRightOffset: ScreenTools.defaultFontPixelWidth * 18
 
     // Pip-view inset pass-through (null-safe, used only for inset reporting)
     readonly property real _piBottomLeft: parentToolInsets ? parentToolInsets.bottomEdgeLeftInset : 0
@@ -103,6 +106,36 @@ Item {
         anchors.rightMargin: _layoutMargin + _ceRightPanel
         spacing:            _layoutSpacing
         visible:            !topRightPanel.visible
+    }
+
+    // The CrownEagle FlyView hides QGC's stock toolbar, so mount the stock
+    // gimbal indicator here to preserve QGC's normal gimbal command path.
+    Rectangle {
+        id:                 crownEagleGimbalIndicatorHost
+        anchors.top:        parent.top
+        anchors.right:      parent.right
+        anchors.topMargin:  _layoutMargin + _ceTopBar
+        anchors.rightMargin: _layoutMargin + _ceRightPanel + _ceGimbalIndicatorRightOffset
+        width:              gimbalIndicatorLoader.item ? gimbalIndicatorLoader.item.width + _margins * 2 : ScreenTools.defaultFontPixelWidth * 12
+        height:             ScreenTools.toolbarHeight
+        radius:             _margins
+        color:              qgcPal.window
+        opacity:            0.92
+        z:                  QGroundControl.zOrderTopMost
+        visible:            gimbalIndicatorLoader.item && gimbalIndicatorLoader.item.showIndicator && !QGroundControl.videoManager.fullScreen
+
+        Component.onCompleted: console.warn("CrownEagle mounted stock gimbal indicator in custom FlyView")
+        onVisibleChanged: if (visible) console.warn("CrownEagle custom gimbal indicator visible")
+
+        Loader {
+            id:             gimbalIndicatorLoader
+            anchors.top:    parent.top
+            anchors.bottom: parent.bottom
+            anchors.left:   parent.left
+            anchors.leftMargin: _margins
+            source:         "qrc:/qml/QGroundControl/Toolbar/GimbalIndicator.qml"
+            active:         true
+        }
     }
 
     FlyViewMissionCompleteDialog {

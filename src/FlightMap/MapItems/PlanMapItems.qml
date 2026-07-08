@@ -33,7 +33,7 @@ Item {
     property var    _guidedController:          globals.guidedControllerFlyView
     property var    _missionLineViewComponent
 
-    property string fmode: vehicle.flightMode
+    property string fmode: vehicle ? vehicle.flightMode : ""
 
     // Add the mission item visuals to the map
     Repeater {

@@ -5,5 +5,12 @@
         <file alias="QGroundControl/FlightDisplay/FlyViewWidgetLayer.qml">src/FlyViewWidgetLayer.qml</file>
         <file alias="geofences/ce_geofence_home_base.plan">res/geofences/ce_geofence_home_base.plan</file>
         <file alias="geofences/ce_geofence_outfield.plan">res/geofences/ce_geofence_outfield.plan</file>
+        <file alias="plans/home_survey_from_outfield.plan">res/plans/home_survey_from_outfield.plan</file>
+        <file alias="plans/home_survey_from_bases.plan">res/plans/home_survey_from_bases.plan</file>
+        <file alias="plans/full_field_from_outfield_enemy.plan">res/plans/full_field_from_outfield_enemy.plan</file>
+        <file alias="plans/full_field_from_bases_enemy.plan">res/plans/full_field_from_bases_enemy.plan</file>
+        <file alias="plans/enemy_survey_from_outfield.plan">res/plans/enemy_survey_from_outfield.plan</file>
+        <file alias="plans/enemy_survey_from_bases.plan">res/plans/enemy_survey_from_bases.plan</file>
+        <file alias="points/demo4_asset_points.yaml">res/points/demo4_asset_points.yaml</file>
     </qresource>
 </RCC>
