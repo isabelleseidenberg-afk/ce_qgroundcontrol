@@ -139,6 +139,7 @@ Item {
     property string selectedMissionMode: "MANUAL_STEP"
     property int selectedManualTaskIndex: 0
     property string selectedTaskName: "TAKEOFF"
+    property bool fineTuningActive: false
     property string selectedTaskLabel: "TAKEOFF"
     property string selectedGripperAction: ""
     property bool missionPanelCollapsed: false
@@ -217,7 +218,7 @@ Item {
         try {
             var payload = JSON.parse(jsonText)
             if (payload.type === "mission_command") {
-                var detail = payload.task_name || payload.task || payload.mode || ""
+                var detail = payload.task_name || payload.task || payload.mode || payload.direction || ""
                 return "Sent: " + payload.command + (detail !== "" ? " " + detail : "")
             }
             if (payload.type === "round_config") {
@@ -757,6 +758,26 @@ Item {
     }
 
     function loadSelectedMissionTask() {
+        // "2ft Hover" / "Fine Tuning" are sent by their own command name, not
+        // wrapped in RUN_TASK. HOVER_2FT IS a real mission_manager task (see
+        // build_task_registry in mission_manager_node.py) -- mission_manager's
+        // _on_qgc_command recognizes the bare "HOVER_2FT" command and calls
+        // run_task() itself, so no task_name/RUN_TASK wrapper is needed here.
+        // FINE_TUNE_MODE is NOT a task -- mission_manager only recognizes it so
+        // it doesn't log "Unsupported QGC command"; px4_control_node is the one
+        // that actually acts on it, over its own dedicated topic.
+        if (selectedTaskName === "HOVER_2FT") {
+            root.fineTuningActive = false
+            root.sendMissionCommand("HOVER_2FT")
+            return
+        }
+        if (selectedTaskName === "FINE_TUNE_MODE") {
+            root.fineTuningActive = true
+            root.sendMissionCommand("FINE_TUNE_MODE")
+            return
+        }
+
+        root.fineTuningActive = false
         var payload = {
             task_name: selectedTaskName,
             round_id: demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId(),
@@ -832,11 +853,23 @@ Item {
         }
         if (commandName === "OPERATOR_APPROVAL") {
             missionStatusText = taskName ? "Target approved" : "Target rejected"
+            return
+        }
+        if (commandName === "HOVER_2FT") {
+            missionStatusText = "2ft hover sent"
+            return
+        }
+        if (commandName === "FINE_TUNE_MODE") {
+            missionStatusText = "Fine tuning enabled"
+            return
         }
     }
 
     function sendMissionCommand(commandName, extra) {
-        root.bridgeSendStatus = "Sending: " + commandName
+        // Surface the nudge direction (FORWARD/BACKWARD/LEFT/RIGHT) in the status
+        // line instead of a bare "FINE_TUNE_NUDGE" that's indistinguishable per-arrow.
+        var label = (extra && extra.direction) ? commandName + " " + extra.direction : commandName
+        root.bridgeSendStatus = "Sending: " + label
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
@@ -1706,6 +1739,60 @@ Row {
                     }
                 }
 
+                // 2ft Hover — slow ease down/up to a 2ft-above-ground hold, measured
+                // via the rangefinder (see px4_control_node's hover_2ft_altitude_m /
+                // hover_2ft_descent_rate_m_s), latched over the current horizontal
+                // position so it doesn't drift sideways.
+                // Fine Tuning — arms the bottom-right nudge arrows; they are a no-op
+                // until this is pressed (px4_control_node's _fine_tune_enabled gate),
+                // and it turns back off automatically when a new task is loaded.
+                // These share selectedTaskName with the task grid above (via
+                // selectMissionTask) so exactly one button in this whole section --
+                // TAKEOFF/SURVEY/GAAP/BATTLESHIP/GRIPPER/2ft Hover/Fine Tuning -- is
+                // ever highlighted at a time. Same two-step flow as the grid too:
+                // clicking only selects (highlight), "Load Task" is what actually
+                // sends the command (see loadSelectedMissionTask's HOVER_2FT /
+                // FINE_TUNE_MODE branch).
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 115; height: 28; radius: 4
+                        color: root.selectedTaskName === "HOVER_2FT" ? _clrBlue : _clrCard
+                        Text {
+                            anchors.centerIn: parent
+                            text: "2FT HOVER"
+                            color: "white"
+                            font.pixelSize: 9
+                            font.bold: root.selectedTaskName === "HOVER_2FT"
+                            elide: Text.ElideRight
+                            width: parent.width - 8
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: root.selectMissionTask("HOVER_2FT", "2FT HOVER", "")
+                        }
+                    }
+                    Rectangle {
+                        width: 115; height: 28; radius: 4
+                        color: root.selectedTaskName === "FINE_TUNE_MODE" ? _clrBlue : _clrCard
+                        Text {
+                            anchors.centerIn: parent
+                            text: "FINE TUNING"
+                            color: "white"
+                            font.pixelSize: 9
+                            font.bold: root.selectedTaskName === "FINE_TUNE_MODE"
+                            elide: Text.ElideRight
+                            width: parent.width - 8
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: root.selectMissionTask("FINE_TUNE_MODE", "FINE TUNING", "")
+                        }
+                    }
+                }
+
                 Rectangle {
                     width: 236; height: 32; radius: 4; color: _clrPurple
                     Text { anchors.centerIn: parent; text: "Load Task"; color: "white"; font.pixelSize: 12; font.bold: true }
@@ -1854,6 +1941,89 @@ Row {
         }
     }
 
+
+    // =========================================================================
+    // FINE TUNE POSITION  (manual 1-inch nudge arrows)
+    // Bottom-right corner of the map/video area — left of the telemetry panel,
+    // above the command bar. Each press is a single one-shot nudge in the
+    // vehicle's current body/heading frame (px4_control_node's nudge_step_m,
+    // default 1 inch) added to whatever position it's currently holding/flying;
+    // it is NOT a continuous jog. These are a no-op until the "Fine Tuning"
+    // button (left panel, above Load Task) has been loaded at least once since
+    // the last task change (px4_control_node's _fine_tune_enabled gate) --
+    // loading it also breaks HOLD/PAUSE back to AUTONOMY (mirrors legacy
+    // RESUME), since px4_control_node only streams setpoints, and therefore only
+    // acts on nudges, while in AUTONOMY. See ce_px4_bridge/px4_control_node.py
+    // _on_fine_tune_nudge / _on_fine_tune_mode / _manual_offset_*.
+    // Mirrored client-side via root.fineTuningActive (set true when Fine Tuning
+    // is loaded, false when any other task loads) so the arrows refuse to send
+    // at all -- rather than silently sending a command px4_control_node would
+    // just ignore -- until Fine Tuning has actually been loaded.
+    // =========================================================================
+    Rectangle {
+        id:                   fineTunePanel
+        width:                128
+        height:               128
+        anchors.right:        rightPanel.left
+        anchors.rightMargin:  12
+        anchors.bottom:       bottomBar.top
+        anchors.bottomMargin: 12
+        color:                "#F2111820"
+        border.color:         _clrMuted
+        border.width:         1
+        radius:               8
+        z:                    900
+        opacity:              root.fineTuningActive ? 1.0 : 0.4
+
+        function nudge(direction) {
+            if (!root.fineTuningActive) {
+                root.missionStatusText = "Select Fine Tuning and Load Task before nudging"
+                return
+            }
+            root.sendMissionCommand("FINE_TUNE_NUDGE", { direction: direction })
+        }
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 4
+
+            Rectangle {
+                width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                anchors.horizontalCenter: parent.horizontalCenter
+                Text { anchors.centerIn: parent; text: "▲"; color: "white"; font.pixelSize: 15; font.bold: true }
+                MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("FORWARD") }
+            }
+
+            Row {
+                spacing: 4
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                    Text { anchors.centerIn: parent; text: "◄"; color: "white"; font.pixelSize: 15; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("LEFT") }
+                }
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: "transparent"
+                    Text { anchors.centerIn: parent; text: "1 in"; color: _clrMuted; font.pixelSize: 9 }
+                }
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                    Text { anchors.centerIn: parent; text: "►"; color: "white"; font.pixelSize: 15; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("RIGHT") }
+                }
+            }
+
+            Rectangle {
+                width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                anchors.horizontalCenter: parent.horizontalCenter
+                Text { anchors.centerIn: parent; text: "▼"; color: "white"; font.pixelSize: 15; font.bold: true }
+                MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("BACKWARD") }
+            }
+        }
+    }
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
