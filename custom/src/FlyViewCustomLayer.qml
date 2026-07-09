@@ -148,6 +148,9 @@ Item {
     property string selectedTaskDisplay: "Selected: TAKEOFF"
     property string missionStatusText: "Waiting for operator command"
     property var pendingAssetMatch: null
+    property var latestMissionGoalWaypoint: null
+    property var previousMissionGoalWaypoint: null
+    property var _confirmedAssetMarkers: []
 
 
     // Territory status driven by territory_status messages from the geofence monitor.
@@ -386,6 +389,9 @@ Item {
         pendingShape      = "Triangle"
         assetModel.clear()
         root.clearDisplayedSurveyPlan()
+        latestMissionGoalWaypoint = null
+        previousMissionGoalWaypoint = null
+        root.clearConfirmedAssetMarkers()
     }
 
     // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
@@ -579,6 +585,104 @@ Item {
         _fobMarkers = []
     }
 
+    function clearConfirmedAssetMarkers() {
+        for (var i = 0; i < _confirmedAssetMarkers.length; i++) {
+            _clearMapObject(_confirmedAssetMarkers[i])
+        }
+        _confirmedAssetMarkers = []
+    }
+
+    function colorForAssetMarker(value) {
+        var key = String(value || "").toLowerCase().trim()
+        var colors = {
+            red: "#e53935",
+            orange: "#fb8c00",
+            yellow: "#fdd835",
+            green: "#43a047",
+            blue: "#1e88e5",
+            purple: "#8e24aa",
+            violet: "#8e24aa",
+            pink: "#d81b60",
+            black: "#212121",
+            white: "#f5f5f5",
+            gray: "#757575",
+            grey: "#757575",
+            brown: "#795548",
+            tan: "#d2b48c"
+        }
+        return colors[key] || _clrAmber
+    }
+
+    function validMapCoordinate(coord) {
+        if (!coord) return false
+        var lat = Number(coord.latitude)
+        var lon = Number(coord.longitude)
+        return !isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+    }
+
+    function coordinateFromGoalWaypoint(goal) {
+        if (!goal) return null
+        var lat = Number(goal.latitude)
+        var lon = Number(goal.longitude)
+        var alt = Number(goal.altitude || 0)
+        if (isNaN(lat) || isNaN(lon)) {
+            return null
+        }
+        return QtPositioning.coordinate(lat, lon, isNaN(alt) ? 0 : alt)
+    }
+
+    function confirmedAssetCoordinate(candidate) {
+        var goal = candidate && candidate.marker_goal_waypoint ? candidate.marker_goal_waypoint : latestMissionGoalWaypoint
+        var goalCoord = root.coordinateFromGoalWaypoint(goal)
+        if (root.validMapCoordinate(goalCoord)) {
+            return goalCoord
+        }
+        if (root.validMapCoordinate(_activeVehicle && _activeVehicle.coordinate)) {
+            return _activeVehicle.coordinate
+        }
+        return null
+    }
+
+    function assetMarkerColor(candidate) {
+        if (!candidate) return _clrAmber
+        if (candidate.matched_target && candidate.matched_target.color) {
+            return root.colorForAssetMarker(candidate.matched_target.color)
+        }
+        if (candidate.detected_color) {
+            return root.colorForAssetMarker(candidate.detected_color)
+        }
+        return _clrAmber
+    }
+
+    function assetMarkerTextColor(fillColor) {
+        var key = String(fillColor || "").toLowerCase()
+        return key === "#f5f5f5" || key === "#fdd835" || key === "#d2b48c" ? "#111111" : "white"
+    }
+
+    function addConfirmedAssetMarker(candidate) {
+        if (!mapControl || !assetMarkerComponent) {
+            return
+        }
+        var coord = root.confirmedAssetCoordinate(candidate)
+        if (!root.validMapCoordinate(coord)) {
+            console.warn("Cannot place confirmed asset marker: no valid map coordinate")
+            return
+        }
+        var fillColor = root.assetMarkerColor(candidate)
+        var marker = assetMarkerComponent.createObject(mapControl, {
+            coordinate: coord,
+            markerColor: fillColor,
+            markerTextColor: root.assetMarkerTextColor(fillColor),
+            label: String(_confirmedAssetMarkers.length + 1)
+        })
+        if (!marker) {
+            console.warn("Cannot create confirmed asset marker")
+            return
+        }
+        mapControl.addMapItem(marker)
+        _confirmedAssetMarkers.push(marker)
+    }
+
     function pathCenter(path) {
         var lat = 0
         var lon = 0
@@ -677,6 +781,12 @@ Item {
         }
         missionModeDisplay = status.current_mission_mode || missionModeDisplay
         missionTaskDisplay = status.current_task || missionTaskDisplay
+        if (status.previous_goal_waypoint && status.previous_goal_waypoint.latitude !== undefined && status.previous_goal_waypoint.longitude !== undefined) {
+            previousMissionGoalWaypoint = status.previous_goal_waypoint
+        }
+        if (status.active_goal_waypoint && status.active_goal_waypoint.latitude !== undefined && status.active_goal_waypoint.longitude !== undefined) {
+            latestMissionGoalWaypoint = status.active_goal_waypoint
+        }
         var px4Reason = ""
         if (status.px4_control_ready === false && status.px4_control_ready_reason) {
             px4Reason = "PX4: " + status.px4_control_ready_reason
@@ -725,6 +835,13 @@ Item {
     }
 
     function showAssetMatchCandidate(candidate) {
+        if (candidate && candidate.marker_goal_waypoint && candidate.marker_goal_waypoint.latitude !== undefined && candidate.marker_goal_waypoint.longitude !== undefined) {
+            // The asset_match_node selected this waypoint at detection time. Keep it frozen.
+        } else if (candidate && previousMissionGoalWaypoint) {
+            candidate.marker_goal_waypoint = previousMissionGoalWaypoint
+        } else if (candidate && latestMissionGoalWaypoint) {
+            candidate.marker_goal_waypoint = latestMissionGoalWaypoint
+        }
         pendingAssetMatch = candidate
         missionModeDisplay = "HOLD"
         missionStatusText = "Target candidate found"
@@ -735,11 +852,15 @@ Item {
         if (!pendingAssetMatch) {
             return
         }
-        var candidateId = pendingAssetMatch.candidate_id || ""
+        var candidate = pendingAssetMatch
+        var candidateId = candidate.candidate_id || ""
         root.sendMissionCommand("OPERATOR_APPROVAL", {
             approved: approved,
             candidate_id: candidateId
         })
+        if (approved) {
+            root.addConfirmedAssetMarker(candidate)
+        }
         if (!approved) {
             root.sendMissionCommand("RESUME", { candidate_id: candidateId })
         }
@@ -919,7 +1040,10 @@ Item {
     property string demo4PointsStatus:  ""
 
     Component.onCompleted: showTemporaryMapOverlays()
-    Component.onDestruction: clearTemporaryMapOverlays()
+    Component.onDestruction: {
+        clearTemporaryMapOverlays()
+        clearConfirmedAssetMarkers()
+    }
 
     Component {
         id: arenaOverlayComponent
@@ -972,6 +1096,37 @@ Item {
                     text: label
                     color: "white"
                     font.pixelSize: 11
+                    font.bold: true
+                }
+            }
+        }
+    }
+
+    Component {
+        id: assetMarkerComponent
+
+        MapQuickItem {
+            property color markerColor: _clrAmber
+            property color markerTextColor: "white"
+            property string label: ""
+
+            z: QGroundControl.zOrderMapItems + 30
+            anchorPoint.x: sourceItem.width / 2
+            anchorPoint.y: sourceItem.height / 2
+
+            sourceItem: Rectangle {
+                width: 22
+                height: 22
+                radius: 11
+                color: markerColor
+                border.color: "white"
+                border.width: 2
+
+                Text {
+                    anchors.centerIn: parent
+                    text: label
+                    color: markerTextColor
+                    font.pixelSize: 10
                     font.bold: true
                 }
             }
@@ -1590,34 +1745,6 @@ Item {
                     }
                 }
 
-                ComboBox {
-                    id: cameraModeCombo
-                    model: ["survey", "retrieve", "manual"]
-                    width: 236
-                    implicitHeight: 30
-                    currentIndex: model.indexOf(root.cameraMode)
-                    onActivated: function(i) {
-                        root.cameraMode = model[i]
-                    }
-                    background: Rectangle { color: _clrCard; radius: 4 }
-                    contentItem: Text {
-                        text: "Camera: " + cameraModeCombo.displayText
-                        color: "white"
-                        font.pixelSize: 12
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                    }
-                    popup: Popup {
-                        y: cameraModeCombo.height; width: cameraModeCombo.width; padding: 1
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: cameraModeCombo.delegateModel }
-                    }
-                    delegate: ItemDelegate {
-                        width: cameraModeCombo.width; highlighted: cameraModeCombo.highlightedIndex === index
-                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
-                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 12; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
-                    }
-                }
 
                 Row {
                     spacing: 6
