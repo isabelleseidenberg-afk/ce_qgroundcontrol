@@ -118,6 +118,7 @@ Item {
     property string demo1Color: "Red"
 
     // Demo #2 state
+    property string demo2Color: "Red"
     property string demo2Shape: "Triangle"
 
     // Demo #3 & #4 state — pending selections for the "add asset" row
@@ -398,6 +399,7 @@ Item {
         selectedMissionRoundIndex = 0
         isArmed           = false
         demo1Color        = "Red"
+        demo2Color        = "Red"
         demo2Shape        = "Triangle"
         pendingColor      = "Red"
         pendingShape      = "Triangle"
@@ -498,6 +500,9 @@ Item {
         }
         if (selectedDemoIndex === 0) {
             return demo1Color.toLowerCase()
+        }
+        if (selectedDemoIndex === 1) {
+            return demo2Color.toLowerCase()
         }
         if (assetModel.count > 0) {
             return assetModel.get(0).assetColor.toLowerCase()
@@ -1583,6 +1588,24 @@ Item {
             Column {
                 Layout.fillWidth: true; spacing: 6
                 visible: demoLocked && selectedDemoIndex === 1
+                Text { text: "Asset Color"; color: _clrMuted; font.pixelSize: 11 }
+                ComboBox {
+                    id: d2Color; model: root.colorOptions; width: 236
+                    currentIndex: root.colorOptions.indexOf(root.demo2Color)
+                    onActivated: function(i) { root.demo2Color = root.colorOptions[i] }
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: Text { text: d2Color.displayText; color: "white"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; leftPadding: 10 }
+                    popup: Popup {
+                        y: d2Color.height; width: d2Color.width; padding: 1
+                        background: Rectangle { color: _clrCard; radius: 4 }
+                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: d2Color.delegateModel }
+                    }
+                    delegate: ItemDelegate {
+                        width: d2Color.width; highlighted: d2Color.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
+                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 12; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
                 Text { text: "Target Shape"; color: _clrMuted; font.pixelSize: 11 }
                 ComboBox {
                     id: d2Shape; model: root.shapeOptions; width: 236
