@@ -2154,18 +2154,20 @@ Row {
 
 
     // =========================================================================
-    // FINE TUNE POSITION  (manual 1-inch nudge arrows)
+    // FINE TUNE POSITION  (manual 1-inch nudge arrows + 5-degree yaw arrows)
     // Bottom-right corner of the map/video area — left of the telemetry panel,
     // above the command bar. Each press is a single one-shot nudge in the
     // vehicle's current body/heading frame (px4_control_node's nudge_step_m,
     // default 1 inch) added to whatever position it's currently holding/flying;
-    // it is NOT a continuous jog. These are a no-op until the "Fine Tuning"
-    // button (left panel, above Load Task) has been loaded at least once since
-    // the last task change (px4_control_node's _fine_tune_enabled gate) --
-    // loading it also breaks HOLD/PAUSE back to AUTONOMY (mirrors legacy
-    // RESUME), since px4_control_node only streams setpoints, and therefore only
-    // acts on nudges, while in AUTONOMY. See ce_px4_bridge/px4_control_node.py
-    // _on_fine_tune_nudge / _on_fine_tune_mode / _manual_offset_*.
+    // it is NOT a continuous jog. The curved arrows below rotate yaw by
+    // yaw_nudge_step_deg (default 5°) the same way, clockwise/counter-clockwise.
+    // These are a no-op until the "Fine Tuning" button (left panel, above Load
+    // Task) has been loaded at least once since the last task change
+    // (px4_control_node's _fine_tune_enabled gate) -- loading it also breaks
+    // HOLD/PAUSE back to AUTONOMY (mirrors legacy RESUME), since px4_control_node
+    // only streams setpoints, and therefore only acts on nudges, while in
+    // AUTONOMY. See ce_px4_bridge/px4_control_node.py _on_fine_tune_nudge /
+    // _on_fine_tune_mode / _manual_offset_*.
     // Mirrored client-side via root.fineTuningActive (set true when Fine Tuning
     // is loaded, false when any other task loads) so the arrows refuse to send
     // at all -- rather than silently sending a command px4_control_node would
@@ -2174,7 +2176,7 @@ Row {
     Rectangle {
         id:                   fineTunePanel
         width:                128
-        height:               128
+        height:               172
         anchors.right:        rightPanel.left
         anchors.rightMargin:  12
         anchors.bottom:       bottomBar.top
@@ -2201,7 +2203,7 @@ Row {
             Rectangle {
                 width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
                 anchors.horizontalCenter: parent.horizontalCenter
-                Text { anchors.centerIn: parent; text: "▲"; color: "white"; font.pixelSize: 15; font.bold: true }
+                Text { anchors.centerIn: parent; text: "▲"; color: "white"; font.pixelSize: 18; font.bold: true }
                 MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("FORWARD") }
             }
 
@@ -2211,18 +2213,18 @@ Row {
 
                 Rectangle {
                     width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
-                    Text { anchors.centerIn: parent; text: "◄"; color: "white"; font.pixelSize: 15; font.bold: true }
+                    Text { anchors.centerIn: parent; text: "◄"; color: "white"; font.pixelSize: 18; font.bold: true }
                     MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("LEFT") }
                 }
 
                 Rectangle {
                     width: 34; height: 34; radius: 6; color: "transparent"
-                    Text { anchors.centerIn: parent; text: "1 in"; color: _clrMuted; font.pixelSize: 9 }
+                    Text { anchors.centerIn: parent; text: "1 in"; color: _clrMuted; font.pixelSize: 11 }
                 }
 
                 Rectangle {
                     width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
-                    Text { anchors.centerIn: parent; text: "►"; color: "white"; font.pixelSize: 15; font.bold: true }
+                    Text { anchors.centerIn: parent; text: "►"; color: "white"; font.pixelSize: 18; font.bold: true }
                     MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("RIGHT") }
                 }
             }
@@ -2230,8 +2232,30 @@ Row {
             Rectangle {
                 width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
                 anchors.horizontalCenter: parent.horizontalCenter
-                Text { anchors.centerIn: parent; text: "▼"; color: "white"; font.pixelSize: 15; font.bold: true }
+                Text { anchors.centerIn: parent; text: "▼"; color: "white"; font.pixelSize: 18; font.bold: true }
                 MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("BACKWARD") }
+            }
+
+            Row {
+                spacing: 4
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                    Text { anchors.centerIn: parent; text: "↺"; color: "white"; font.pixelSize: 20; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("YAW_CCW") }
+                }
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: "transparent"
+                    Text { anchors.centerIn: parent; text: "5°"; color: _clrMuted; font.pixelSize: 11 }
+                }
+
+                Rectangle {
+                    width: 34; height: 34; radius: 6; color: _clrCard; border.color: _clrMuted; border.width: 1
+                    Text { anchors.centerIn: parent; text: "↻"; color: "white"; font.pixelSize: 20; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: fineTunePanel.nudge("YAW_CW") }
+                }
             }
         }
     }
