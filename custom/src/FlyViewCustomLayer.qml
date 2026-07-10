@@ -142,6 +142,8 @@ Item {
     property bool fineTuningActive: false
     property string selectedTaskLabel: "TAKEOFF"
     property string selectedGripperAction: ""
+    property string selectedBattleshipDestinationId: ""
+    property var completedBattleshipDestinations: ({})
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
@@ -172,10 +174,22 @@ Item {
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
         { label: "GAAP", task: "GAAP" },
-        { label: "BATTLESHIP", task: "BATTLESHIP", round_id: 3 },
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
         { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" }
     ]
+
+    readonly property var battleshipOrigins: ({
+        bases: [
+            [38.75080233, -77.49716989],
+            [38.75079103, -77.49715815],
+            [38.75077973, -77.49714641]
+        ],
+        outfield: [
+            [38.75070545, -77.49706932],
+            [38.75071676, -77.49708106],
+            [38.75072806, -77.4970928]
+        ]
+    })
 
     property var _arenaOverlay
     property var _divisionLineOverlay
@@ -392,6 +406,7 @@ Item {
         latestMissionGoalWaypoint = null
         previousMissionGoalWaypoint = null
         root.clearConfirmedAssetMarkers()
+        root.resetBattleshipState()
     }
 
     // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
@@ -399,6 +414,33 @@ Item {
     // Shared by the asset row UI and the round_config payload so they never diverge.
     function battleshipReturnLabel(index) {
         return "Return to opponent battleship position " + (index + 1)
+    }
+
+    function resetBattleshipState() {
+        selectedBattleshipDestinationId = ""
+        completedBattleshipDestinations = ({})
+    }
+
+    function battleshipDestinationId(index) {
+        return "battleship_" + (index + 1)
+    }
+
+    function battleshipCompleted(index) {
+        return completedBattleshipDestinations[battleshipDestinationId(index)] === true
+    }
+
+    function selectBattleship(index) {
+        var destinationId = battleshipDestinationId(index)
+        if (selectedMissionRoundId() !== 3 || completedBattleshipDestinations[destinationId]) return
+        selectMissionTask("GO_TO_WAYPOINT", "BATTLESHIP " + (index + 1), "")
+        selectedBattleshipDestinationId = destinationId
+    }
+
+    function battleshipWaypoint(index) {
+        var territory = selectedTerritory()
+        var origins = battleshipOrigins[territory] || battleshipOrigins.outfield
+        var origin = origins[index]
+        return { latitude: origin[0], longitude: origin[1], altitude: 2 }
     }
 
     function assetList() {
@@ -553,6 +595,7 @@ Item {
             root.bridgeSendStatus = "Send failed"
             return
         }
+        root.resetBattleshipState()
         root.displaySelectedSurveyPlan()
     }
 
@@ -781,6 +824,15 @@ Item {
         }
         missionModeDisplay = status.current_mission_mode || missionModeDisplay
         missionTaskDisplay = status.current_task || missionTaskDisplay
+        var completedDestination = status.last_completed_destination_id || ""
+        if (status.last_completed_task === "GO_TO_WAYPOINT" && completedDestination.indexOf("battleship_") === 0
+                && !completedBattleshipDestinations[completedDestination]) {
+            var completed = ({})
+            for (var destinationKey in completedBattleshipDestinations) completed[destinationKey] = completedBattleshipDestinations[destinationKey]
+            completed[completedDestination] = true
+            completedBattleshipDestinations = completed
+            if (selectedBattleshipDestinationId === completedDestination) selectedBattleshipDestinationId = ""
+        }
         if (status.previous_goal_waypoint && status.previous_goal_waypoint.latitude !== undefined && status.previous_goal_waypoint.longitude !== undefined) {
             previousMissionGoalWaypoint = status.previous_goal_waypoint
         }
@@ -875,6 +927,7 @@ Item {
         selectedTaskLabel = label || taskName
         selectedTaskDisplay = "Selected: " + selectedTaskLabel
         selectedGripperAction = gripperAction || ""
+        if (taskName !== "GO_TO_WAYPOINT") selectedBattleshipDestinationId = ""
         missionStatusText = "Task selected"
     }
 
@@ -910,6 +963,11 @@ Item {
         if (selectedTaskName === "SURVEY_FOR_ASSET") {
             payload.survey_plan_file = selectedSurveyPlanFile()
             root.displaySelectedSurveyPlan()
+        }
+        if (selectedTaskName === "GO_TO_WAYPOINT" && selectedBattleshipDestinationId !== "") {
+            var shipIndex = Number(selectedBattleshipDestinationId.split("_")[1]) - 1
+            payload.destination_id = selectedBattleshipDestinationId
+            payload.waypoint_coordinate = battleshipWaypoint(shipIndex)
         }
         root.sendMissionCommand("RUN_TASK", payload)
     }
@@ -1861,6 +1919,32 @@ Row {
                                 anchors.fill: parent
                                 enabled: parent.roundAllowed
                                 onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "")
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    Repeater {
+                        model: 3
+                        delegate: Rectangle {
+                            property bool roundAllowed: root.selectedMissionRoundId() === 3
+                            property bool destinationCompleted: root.battleshipCompleted(index)
+                            property string destinationId: root.battleshipDestinationId(index)
+                            width: 74; height: 28; radius: 4
+                            color: destinationCompleted ? "#555"
+                                  : root.selectedBattleshipDestinationId === destinationId ? _clrBlue : _clrCard
+                            opacity: roundAllowed && !destinationCompleted ? 1.0 : 0.35
+                            Text {
+                                anchors.centerIn: parent
+                                text: "BATTLESHIP " + (index + 1)
+                                color: "white"; font.pixelSize: 7; font.bold: true
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: parent.roundAllowed && !parent.destinationCompleted
+                                onClicked: root.selectBattleship(index)
                             }
                         }
                     }
