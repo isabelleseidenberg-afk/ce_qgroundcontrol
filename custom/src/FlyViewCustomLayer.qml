@@ -913,9 +913,7 @@ Item {
         if (approved) {
             root.addConfirmedAssetMarker(candidate)
         }
-        if (!approved) {
-            root.sendMissionCommand("RESUME", { candidate_id: candidateId })
-        }
+        root.sendMissionCommand("RESUME", { candidate_id: candidateId })
         missionStatusText = approved ? "Target approved" : "Target rejected"
         pendingAssetMatch = null
         assetMatchPopup.close()
