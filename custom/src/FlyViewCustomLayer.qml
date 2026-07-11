@@ -179,18 +179,11 @@ Item {
         { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" }
     ]
 
-    readonly property var battleshipOrigins: ({
-        bases: [
-            [38.75080233, -77.49716989],
-            [38.75079103, -77.49715815],
-            [38.75077973, -77.49714641]
-        ],
-        outfield: [
-            [38.75070545, -77.49706932],
-            [38.75071676, -77.49708106],
-            [38.75072806, -77.4970928]
-        ]
-    })
+    readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
+    property var battleshipOrigins: ({ bases: [], outfield: [] })
+    property var battleshipTerritoryShipSets: ({})
+    property bool battleshipCoordinatesLoaded: false
+    property string battleshipCoordinatesError: ""
 
     property var _arenaOverlay
     property var _divisionLineOverlay
@@ -438,10 +431,88 @@ Item {
         selectedBattleshipDestinationId = destinationId
     }
 
+    function parseBattleshipCoordinatesYaml(text) {
+        var origins = { bases: [null, null, null], outfield: [null, null, null] }
+        var routing = {}
+        var currentShipSet = ""
+        var currentShipIndex = -1
+        var inRouting = false
+        var lines = String(text || "").split(/\r?\n/)
+
+        for (var i = 0; i < lines.length; i++) {
+            var trimmed = lines[i].trim()
+            if (trimmed === "battleship_territory_ship_sets:") {
+                inRouting = true
+                currentShipSet = ""
+                currentShipIndex = -1
+                continue
+            }
+
+            var shipHeader = trimmed.match(/^(bases|outfield)_ship_([1-3]):$/)
+            if (shipHeader) {
+                inRouting = false
+                currentShipSet = shipHeader[1]
+                currentShipIndex = Number(shipHeader[2]) - 1
+                continue
+            }
+
+            if (inRouting) {
+                var route = trimmed.match(/^(bases|outfield):\s*(bases|outfield)$/)
+                if (route) routing[route[1]] = route[2]
+                continue
+            }
+
+            if (currentShipSet !== "" && trimmed.indexOf("origin:") === 0) {
+                var origin = trimmed.match(/^origin:\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
+                if (origin) {
+                    origins[currentShipSet][currentShipIndex] = [Number(origin[1]), Number(origin[2])]
+                    currentShipSet = ""
+                    currentShipIndex = -1
+                }
+            }
+        }
+
+        if (routing.bases !== "bases" && routing.bases !== "outfield") {
+            throw new Error("missing battleship territory mapping for bases")
+        }
+        if (routing.outfield !== "bases" && routing.outfield !== "outfield") {
+            throw new Error("missing battleship territory mapping for outfield")
+        }
+        for (var setName of ["bases", "outfield"]) {
+            for (var ship = 0; ship < 3; ship++) {
+                if (!origins[setName][ship]) {
+                    throw new Error("missing " + setName + "_ship_" + (ship + 1) + ".origin")
+                }
+            }
+        }
+        return { origins: origins, routing: routing }
+    }
+
+    function loadBattleshipCoordinates() {
+        battleshipCoordinatesLoaded = false
+        battleshipCoordinatesError = ""
+        try {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", "qrc" + battleshipCoordinatesConfigPath, false)
+            xhr.send()
+            var parsed = parseBattleshipCoordinatesYaml(xhr.responseText || "")
+            battleshipOrigins = parsed.origins
+            battleshipTerritoryShipSets = parsed.routing
+            battleshipCoordinatesLoaded = true
+            console.log("Loaded battleship coordinates:", battleshipCoordinatesConfigPath)
+        } catch (err) {
+            battleshipCoordinatesError = String(err)
+            console.error("Failed to load battleship coordinates:", battleshipCoordinatesError)
+        }
+    }
+
     function battleshipWaypoint(index) {
+        if (!battleshipCoordinatesLoaded) return null
         var territory = selectedTerritory()
-        var origins = battleshipOrigins[territory] || battleshipOrigins.outfield
-        var origin = origins[index]
+        var shipSet = battleshipTerritoryShipSets[territory]
+        var origins = battleshipOrigins[shipSet]
+        var origin = origins && origins[index]
+        if (!origin) return null
         return { latitude: origin[0], longitude: origin[1], altitude: 2 }
     }
 
@@ -969,8 +1040,14 @@ Item {
         }
         if (selectedTaskName === "GO_TO_WAYPOINT" && selectedBattleshipDestinationId !== "") {
             var shipIndex = Number(selectedBattleshipDestinationId.split("_")[1]) - 1
+            var shipWaypoint = battleshipWaypoint(shipIndex)
+            if (!shipWaypoint) {
+                missionStatusText = "Battleship coordinates unavailable: " + battleshipCoordinatesError
+                bridgeSendStatus = "Load blocked: battleship coordinate config"
+                return
+            }
             payload.destination_id = selectedBattleshipDestinationId
-            payload.waypoint_coordinate = battleshipWaypoint(shipIndex)
+            payload.waypoint_coordinate = shipWaypoint
         }
         root.sendMissionCommand("RUN_TASK", payload)
     }
@@ -1100,7 +1177,10 @@ Item {
     property bool   demo4PointsLoaded:  false
     property string demo4PointsStatus:  ""
 
-    Component.onCompleted: showTemporaryMapOverlays()
+    Component.onCompleted: {
+        loadBattleshipCoordinates()
+        showTemporaryMapOverlays()
+    }
     Component.onDestruction: {
         clearTemporaryMapOverlays()
         clearConfirmedAssetMarkers()

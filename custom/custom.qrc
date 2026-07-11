@@ -12,5 +12,6 @@
         <file alias="plans/enemy_survey_from_outfield.plan">res/plans/enemy_survey_from_outfield.plan</file>
         <file alias="plans/enemy_survey_from_bases.plan">res/plans/enemy_survey_from_bases.plan</file>
         <file alias="points/demo4_asset_points.yaml">res/points/demo4_asset_points.yaml</file>
+        <file alias="config/set_plan_coordinates.yaml">../../ce_lcp/qgc-interface/scripts/set_plan_coordinates.yaml</file>
     </qresource>
 </RCC>
