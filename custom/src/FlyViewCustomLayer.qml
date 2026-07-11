@@ -1305,6 +1305,12 @@ Item {
         height:         _topBarHeight
         color:          _clrPanel
 
+        // Consumes clicks on empty chrome so they don't fall through to the map
+        // underneath (e.g. accidentally setting a waypoint/origin).
+        MouseArea {
+            anchors.fill: parent
+        }
+
         RowLayout {
             anchors.fill:        parent
             anchors.leftMargin:  14
@@ -1386,8 +1392,32 @@ Item {
             Item { Layout.fillWidth: true }
 
             Row {
+                id:      statusTileRow
                 Layout.preferredHeight: 34
                 spacing: 8
+
+                Rectangle {
+                    width: 104; height: 34; radius: 5
+                    color: !_activeVehicle ? _clrCard
+                           : _activeVehicle.messageTypeError   ? _clrRed
+                           : _activeVehicle.messageTypeWarning ? _clrAmber
+                           : _clrCard
+                    Column {
+                        anchors.centerIn: parent; spacing: 0
+                        Text { text: "MESSAGES"; color: "white"; opacity: 0.75; font.pixelSize: 9; anchors.horizontalCenter: parent.horizontalCenter }
+                        Text {
+                            text: _activeVehicle ? _activeVehicle.messageCount : "—"
+                            color: "white"
+                            font.pixelSize: 12; font.bold: true
+                            anchors.horizontalCenter: parent.horizontalCenter
+                        }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: messagesPanel.visible ? messagesPanel.close() : messagesPanel.open()
+                    }
+                }
 
                 Rectangle {
                     width: 118; height: 34
@@ -1520,6 +1550,69 @@ Item {
         }
     }
 
+    // Vehicle messages dropdown, toggled by the MESSAGES tile in topBar. Reuses
+    // QGC's own VehicleMessageList (formatted STATUSTEXT log + clear button) so
+    // message formatting/coloring stays in sync with stock QGC.
+    //
+    // Parented to the window's Overlay (like QGC's own QGCPopupDialog/checklist)
+    // instead of living in the normal FlyView item tree -- plain Item z-values
+    // are only compared against SIBLINGS and can never escape above another
+    // branch's stacking (e.g. the preflight checklist, which is itself a Popup
+    // living in this same Overlay). Overlay content always paints above the
+    // window's regular content, and within the Overlay our z wins explicitly.
+    Popup {
+        id:           messagesPanel
+        parent:       Overlay.overlay
+        x:            statusTileRow.mapToItem(Overlay.overlay, 0, 0).x
+        y:            topBar.mapToItem(Overlay.overlay, 0, topBar.height + 8).y
+        z:            10000
+        modal:        false
+        focus:        false
+        closePolicy:  Popup.NoAutoClose
+        padding:      0
+        width:        420
+        height:       Math.min(messagesCol.implicitHeight + 24, 420)
+
+        background: Rectangle {
+            color:        "#F2111820"
+            border.color: _clrAmber
+            border.width: 1
+            radius:       8
+        }
+
+        contentItem: Column {
+            id:              messagesCol
+            anchors.left:    parent.left
+            anchors.right:   parent.right
+            anchors.top:     parent.top
+            anchors.margins: 12
+            spacing:         8
+
+            Item {
+                width:  parent.width
+                height: 20
+                Text { text: "Vehicle Messages"; color: "white"; font.pixelSize: 14; font.bold: true; anchors.left: parent.left }
+                Text {
+                    text: "✕"; color: _clrMuted; font.pixelSize: 15; anchors.right: parent.right
+                    MouseArea { anchors.fill: parent; onClicked: messagesPanel.close() }
+                }
+            }
+
+            Flickable {
+                width:         parent.width
+                height:        Math.min(vehicleMessageList.height, 340)
+                contentWidth:  width
+                contentHeight: vehicleMessageList.height
+                clip:          true
+
+                VehicleMessageList {
+                    id:    vehicleMessageList
+                    width: parent.width
+                }
+            }
+        }
+    }
+
 
     // =========================================================================
     // LEFT SIDEBAR  (260 px)
@@ -1531,6 +1624,12 @@ Item {
         anchors.bottom: bottomBar.top
         width:          _leftPanelWidth
         color:          _clrPanel
+
+        // Consumes clicks on empty chrome so they don't fall through to the map
+        // underneath (e.g. accidentally setting a waypoint/origin).
+        MouseArea {
+            anchors.fill: parent
+        }
 
         // The sidebar content can be taller than the panel (e.g. Demo #4 adds the
         // YAML scoring section), so it lives inside a vertical Flickable and scrolls
@@ -2129,6 +2228,12 @@ Row {
         width:          _rightPanelWidth
         color:          _clrPanel
 
+        // Consumes clicks on empty chrome so they don't fall through to the map
+        // underneath (e.g. accidentally setting a waypoint/origin).
+        MouseArea {
+            anchors.fill: parent
+        }
+
         Column {
             anchors.fill:    parent
             anchors.margins: 12
@@ -2289,6 +2394,12 @@ Row {
         z:                    900
         opacity:              root.fineTuningActive ? 1.0 : 0.4
 
+        // Consumes clicks on empty chrome (gaps between arrow buttons, panel
+        // margins) so they don't fall through to the map underneath.
+        MouseArea {
+            anchors.fill: parent
+        }
+
         function nudge(direction) {
             if (!root.fineTuningActive) {
                 root.missionStatusText = "Select Fine Tuning and Load Task before nudging"
@@ -2372,6 +2483,12 @@ Row {
         anchors.right:  parent.right
         height:         _bottomBarHeight
         color:          _clrPanel
+
+        // Consumes clicks on empty chrome so they don't fall through to the map
+        // underneath (e.g. accidentally setting a waypoint/origin).
+        MouseArea {
+            anchors.fill: parent
+        }
 
         RowLayout {
             anchors.fill:        parent
@@ -2606,6 +2723,12 @@ Row {
         border.color:        _clrAmber
         border.width:        1
         radius:              8
+
+        // Consumes clicks on empty chrome so they don't fall through to the map
+        // underneath.
+        MouseArea {
+            anchors.fill: parent
+        }
 
         Column {
             id:             infoCol
