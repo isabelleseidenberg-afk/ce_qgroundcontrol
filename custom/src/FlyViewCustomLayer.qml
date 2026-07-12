@@ -1100,6 +1100,12 @@ Item {
             missionStatusText = "Abort sent"
             return
         }
+        if (commandName === "RESET_KILL") {
+            missionModeDisplay = "MANUAL_STEP"
+            missionTaskDisplay = "IDLE"
+            missionStatusText = "Kill reset requested — vehicle remains disarmed"
+            return
+        }
         if (commandName === "RETURN_HOME") {
             missionTaskDisplay = "RTL"
             missionStatusText = "RTL sent"
@@ -2607,6 +2613,25 @@ Row {
 
             // Kill Switch — emergency stop intent
             Rectangle {
+                id: resetKillBtn
+                readonly property bool canRequestReset: !_activeVehicle || !_activeVehicle.armed
+                width: resetKillLbl.width + 28; height: 38; radius: 6
+                color: canRequestReset ? _clrOrange : _clrCard
+                opacity: canRequestReset ? 1.0 : 0.55
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "↺"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: resetKillLbl; text: "RESET KILL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: resetKillBtn.canRequestReset
+                    onClicked: resetKillConfirmPopup.open()
+                }
+            }
+
+            // Kill Switch — emergency stop intent
+            Rectangle {
                 width: landLbl.width + 32; height: 38; color: _clrKill; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
@@ -2625,6 +2650,64 @@ Row {
             }
 
             Item { Layout.fillWidth: true }
+        }
+    }
+
+    Popup {
+        id: resetKillConfirmPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        width: 400
+        height: 190
+        padding: 18
+        x: Math.max(12, (root.width - width) / 2)
+        y: Math.max(12, (root.height - height) / 2)
+        z: 1400
+        background: Rectangle {
+            color: _clrPanel
+            border.color: _clrOrange
+            border.width: 2
+            radius: 8
+        }
+        contentItem: Column {
+            spacing: 14
+            Text {
+                width: parent.width
+                text: "RESET KILL LOCKOUT?"
+                color: "white"
+                font.pixelSize: 16
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Text {
+                width: parent.width
+                text: "Reset is accepted only with fresh PX4 telemetry, a healthy link, the vehicle disarmed, and valid ground-level AGL. It will not arm or resume autonomy."
+                color: _clrMuted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 16
+                Rectangle {
+                    width: 120; height: 36; radius: 6; color: _clrCard; border.color: _clrMuted
+                    Text { anchors.centerIn: parent; text: "CANCEL"; color: "white"; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: resetKillConfirmPopup.close() }
+                }
+                Rectangle {
+                    width: 150; height: 36; radius: 6; color: _clrOrange
+                    Text { anchors.centerIn: parent; text: "CONFIRM RESET"; color: "white"; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            resetKillConfirmPopup.close()
+                            root.sendMissionCommand("RESET_KILL")
+                        }
+                    }
+                }
+            }
         }
     }
 
