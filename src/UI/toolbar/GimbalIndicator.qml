@@ -66,6 +66,7 @@ Item {
                         {id: "yawLock",   text: activeGimbal.yawLock ? qsTr("Yaw <br> Follow") : qsTr("Yaw <br> Lock")  , visible: true                    },
                         {id: "center",    text: qsTr("Center")                                                          , visible: true                    },
                         {id: "tilt90",    text: qsTr("Tilt 90")                                                         , visible: true                    },
+                        {id: "tilt110",   text: qsTr("Tilt 110")                                                        , visible: true                    },
                         {id: "pointHome", text: qsTr("Point <br> Home")                                                 , visible: true                    },
                         {id: "retract",   text: qsTr("Retract")                                                         , visible: true                    },
                         {id: "acqControl",text: hasControl ? qsTr("Release <br> Control") : qsTr("Acquire <br> Control"), visible: acqControlButtonEnabled }
@@ -76,6 +77,7 @@ Item {
                            {"yawLock":      function(){ gimbalController.toggleGimbalYawLock(!activeGimbal.yawLock) }   },
                            {"center":       function(){ gimbalController.centerGimbal() }                               },
                            {"tilt90":       function(){ gimbalController.sendPitchBodyYaw(-90, 0) }                     },
+                           {"tilt110":      function(){ gimbalController.sendPitchBodyYaw(-110, 0) }                    },
                            {"pointHome":    function(){ activeVehicle.guidedModeROI(activeVehicle.homePosition) }       },
                            {"retract":      function(){ gimbalController.toggleGimbalRetracted(true) }                  },
                            // This button changes its action depending on gimbal being under control or not
