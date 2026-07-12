@@ -1496,14 +1496,25 @@ Item {
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth:  150
-                Layout.preferredHeight: 34
-                color:  _clrBlue
-                radius: 5
-                Row {
-                    anchors.centerIn: parent
-                    spacing: 6
+            ComboBox {
+                id:                      topModeCombo
+                Layout.preferredWidth:   150
+                Layout.preferredHeight:  34
+                model:                   root.flightModes
+                currentIndex:            root.flightModes.indexOf(root._currentFlightMode)
+
+                onActivated: function(index) {
+                    if (_activeVehicle) _activeVehicle.flightMode = root.flightModes[index]
+                }
+
+                background: Rectangle {
+                    color:  _clrBlue
+                    radius: 5
+                }
+
+                contentItem: Row {
+                    leftPadding: 10
+                    spacing:     6
                     Text {
                         text:                   "MODE"
                         color:                  "white"
@@ -1518,8 +1529,45 @@ Item {
                         font.pixelSize:   12
                         font.bold:        true
                         anchors.verticalCenter: parent.verticalCenter
-                        width:            86
+                        width:            70
                         elide:            Text.ElideRight
+                    }
+                }
+
+                indicator: Text {
+                    text:                   "▼"
+                    color:                  "white"
+                    font.pixelSize:         10
+                    anchors.right:          parent.right
+                    anchors.rightMargin:    8
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                popup: Popup {
+                    y:       topModeCombo.height
+                    width:   topModeCombo.width
+                    padding: 1
+                    background: Rectangle { color: _clrCard; radius: 4 }
+                    contentItem: ListView {
+                        clip:           true
+                        implicitHeight: contentHeight
+                        model:          topModeCombo.delegateModel
+                        ScrollIndicator.vertical: ScrollIndicator {}
+                    }
+                }
+
+                delegate: ItemDelegate {
+                    width:       topModeCombo.width
+                    highlighted: topModeCombo.highlightedIndex === index
+                    background: Rectangle { color: highlighted ? _clrBlue : _clrCard }
+                    contentItem: Text {
+                        text:              modelData
+                        color:             "white"
+                        font.pixelSize:    12
+                        leftPadding:       10
+                        rightPadding:      10
+                        elide:             Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
                     }
                 }
             }

@@ -463,9 +463,11 @@ bool VideoManager::_updateAutoStream(VideoReceiver *receiver)
 
     const bool settingsChanged = _updateVideoUri(receiver, url);
     if (settingsChanged) {
-        if (!receiver->isThermal()) {
-            _videoSettings->videoSource()->setRawValue(source);
-        }
+        // Deliberately does not call _videoSettings->videoSource()->setRawValue(source)
+        // here: this vehicle's camera advertises VIDEO_STREAM_INFORMATION (RTSP) over
+        // MAVLink on every connection, and letting that silently override an operator's
+        // chosen video source (UDP h.264 from ce_video_gateway) fights the ground
+        // station's own capture pipeline every session.
 
         emit autoStreamConfiguredChanged();
     }
