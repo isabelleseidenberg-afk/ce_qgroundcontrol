@@ -30,7 +30,7 @@
     },
     "groundStation": "QGroundControl",
     "mission": {
-        "cruiseSpeed": 6,
+        "cruiseSpeed": 5,
         "firmwareType": 12,
         "globalPlanAltitudeMode": 1,
         "hoverSpeed": 3,
