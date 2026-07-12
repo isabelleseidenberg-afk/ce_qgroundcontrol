@@ -86,7 +86,42 @@ RowLayout {
             property var    activeVehicle:            QGroundControl.multiVehicleManager.activeVehicle
             property var    flightModeSettings:       QGroundControl.settingsManager.flightModeSettings
             property var    hiddenFlightModesFact:    null
-            property var    hiddenFlightModesList:    [] 
+            property var    hiddenFlightModesList:    []
+
+            // Inline expand/collapse instead of a nested Popup-based ComboBox:
+            // this drawer is itself a modal Popup with CloseOnPressOutside, and
+            // a second nested popup (a real ComboBox dropdown) fights that -
+            // the outer drawer sees the click that opens the inner dropdown as
+            // a press outside itself and immediately closes, so the dropdown
+            // flashes shut before it can be used.
+            property bool modeDropdownExpanded: false
+
+            QGCButton {
+                id:                 modeDropdownSummary
+                Layout.fillWidth:   true
+                text:               (activeVehicle ? activeVehicle.flightMode : qsTr("N/A")) + (modeDropdownExpanded ? " ▲" : " ▼")
+                onClicked:          modeDropdownExpanded = !modeDropdownExpanded
+            }
+
+            ColumnLayout {
+                Layout.fillWidth:   true
+                spacing:            ScreenTools.defaultFontPixelWidth / 2
+                visible:            modeDropdownExpanded
+
+                Repeater {
+                    model: activeVehicle ? activeVehicle.flightModes : []
+
+                    QGCButton {
+                        Layout.fillWidth:   true
+                        text:               modelData
+                        onClicked: {
+                            activeVehicle.flightMode = modelData
+                            modeDropdownExpanded = false
+                            mainWindow.closeIndicatorDrawer()
+                        }
+                    }
+                }
+            }
 
             Component.onCompleted: {
                 // Hidden flight modes are classified by firmware and vehicle class
