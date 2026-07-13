@@ -646,7 +646,7 @@ Item {
         var territory = selectedTerritory()
         var roundId = demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId()
         if (roundId === 4) {
-            return "full_field_from_" + territory + "_enemy.plan"
+            return "full_field_from_" + territory + "_home.plan"
         }
         return "enemy_survey_from_" + territory + ".plan"
     }
