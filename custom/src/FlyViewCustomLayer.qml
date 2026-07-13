@@ -259,7 +259,9 @@ Item {
         }
     }
 
-    readonly property string _videoHealthState: ceVideoStatus.hasStatus ? ceVideoStatus.state : "NO_VIDEO"
+    readonly property string _videoHealthState: !QGroundControl.videoManager.decoding
+                                                 ? "NO_VIDEO"
+                                                 : (ceVideoStatus.hasStatus ? ceVideoStatus.state : "OK")
     readonly property bool _videoLive: _videoHealthState === "OK"
     readonly property bool _videoStale: _videoHealthState === "STALE"
     readonly property string _videoStatusLabel: _videoLive ? "Video: Live" : (_videoStale ? "Video: Stale" : "Video: No Video")
@@ -1606,9 +1608,20 @@ Item {
         }
     }
 
-    // Vehicle messages dropdown, toggled by the MESSAGES tile in topBar. Reuses
-    // QGC's own VehicleMessageList (formatted STATUSTEXT log + clear button) so
-    // message formatting/coloring stays in sync with stock QGC.
+    // Vehicle messages dropdown, toggled by the MESSAGES tile in topBar.
+    //
+    // Deliberately does NOT reuse QGC's stock VehicleMessageList: PX4 can spam
+    // the exact same STATUSTEXT (e.g. "Critical: Arming denied: Resolve system
+    // health failures first") on every retry of a rejected command, and stock
+    // VehicleMessageList inserts a brand new line per message with no dedup,
+    // so a stuck retry loop balloons the panel into a wall of identical red
+    // lines. This list collapses consecutive messages that are identical once
+    // their timestamp is stripped into a single line with a "(xN)" counter
+    // that just keeps updating in place, using the same raw
+    // "<font style=\"<#X>\">[time] Severity: body</font><br/>" format
+    // StatusTextHandler::processStatusText emits (see
+    // src/MAVLink/StatusTextHandler.cc) so severity coloring still matches
+    // stock QGC.
     //
     // Parented to the window's Overlay (like QGC's own QGCPopupDialog/checklist)
     // instead of living in the normal FlyView item tree -- plain Item z-values
@@ -1629,8 +1642,81 @@ Item {
         width:        420
         height:       Math.min(messagesCol.implicitHeight + 24, 420)
 
+        // White/translucent theme for this popup only (rest of the custom
+        // overlay is dark) - matches the operator-preferred look, so text
+        // colors here are dark-on-light rather than the app's usual white-on-dark.
+        readonly property color _msgTextColor:    "#1a1c1f"
+        readonly property color _msgMutedColor:   "#666666"
+        readonly property color _msgDividerColor: "#dddddd"
+
+        // Raw format from StatusTextHandler::processStatusText: style tag is
+        // itself the literal placeholder (<#E>/<#I>/<#N>) that stock QGC's
+        // formatMessage() would normally substitute with real CSS - we do our
+        // own substitution in _severityColorFor instead.
+        readonly property var _rawMessageRe: /^<font style="(<#[A-Z]>)">\[([^\]]*)\] ([^:]*): ([\s\S]*)<\/font>\s*<br\/>\s*$/
+
+        function _severityColorFor(styleTag) {
+            if (styleTag === "<#E>") return _clrRed
+            if (styleTag === "<#I>") return _clrAmber
+            return _msgTextColor
+        }
+
+        function _renderEntry(color, time, severity, body, count) {
+            var suffix = count > 1 ? (' <font style="color:' + _msgMutedColor + '">(×' + count + ')</font>') : ''
+            return '<font style="color:' + color + '">[' + time + '] ' + severity + ': ' + body + '</font>' + suffix
+        }
+
+        // Feed raw "<font ...>...</font><br/>" chunks through here in
+        // chronological (oldest-first) order; each call either collapses into
+        // the current newest entry (if identical once the timestamp is
+        // stripped) or inserts a new one at the front.
+        function _ingestRawMessage(raw) {
+            var m = _rawMessageRe.exec(raw)
+            if (!m) {
+                // Unrecognized format - show verbatim rather than silently drop it.
+                vehicleMessageModel.insert(0, { dedupKey: raw, displayText: raw, count: 1 })
+                return
+            }
+            var style = m[1], time = m[2], severity = m[3], body = m[4]
+            var dedupKey = style + "|" + severity + "|" + body
+            var color = _severityColorFor(style)
+
+            if (vehicleMessageModel.count > 0 && vehicleMessageModel.get(0).dedupKey === dedupKey) {
+                var newCount = vehicleMessageModel.get(0).count + 1
+                vehicleMessageModel.setProperty(0, "count", newCount)
+                vehicleMessageModel.setProperty(0, "displayText", _renderEntry(color, time, severity, body, newCount))
+            } else {
+                vehicleMessageModel.insert(0, {
+                    dedupKey:    dedupKey,
+                    displayText: _renderEntry(color, time, severity, body, 1),
+                    count:       1
+                })
+            }
+        }
+
+        ListModel { id: vehicleMessageModel }
+
+        Connections {
+            target: _activeVehicle
+            onNewFormattedMessage: function(formattedMessage) { messagesPanel._ingestRawMessage(formattedMessage) }
+        }
+
+        Component.onCompleted: {
+            if (_activeVehicle) {
+                // _activeVehicle.formattedMessages is the full history, newest
+                // chunk first; re-ingest oldest-first so insert(0,...) rebuilds
+                // the same newest-first order (and so duplicate runs already in
+                // history collapse too), then reset the badge/counter state.
+                var chunks = _activeVehicle.formattedMessages.match(/<font[\s\S]*?<\/font>\s*<br\/>/g) || []
+                for (var i = chunks.length - 1; i >= 0; i--) {
+                    _ingestRawMessage(chunks[i])
+                }
+                _activeVehicle.resetAllMessages()
+            }
+        }
+
         background: Rectangle {
-            color:        "#F2111820"
+            color:        "#E6FFFFFF"
             border.color: _clrAmber
             border.width: 1
             radius:       8
@@ -1647,23 +1733,113 @@ Item {
             Item {
                 width:  parent.width
                 height: 20
-                Text { text: "Vehicle Messages"; color: "white"; font.pixelSize: 14; font.bold: true; anchors.left: parent.left }
+                Text { text: "Vehicle Messages"; color: messagesPanel._msgTextColor; font.pixelSize: 14; font.bold: true; anchors.left: parent.left }
                 Text {
-                    text: "✕"; color: _clrMuted; font.pixelSize: 15; anchors.right: parent.right
+                    text: "✕"; color: messagesPanel._msgMutedColor; font.pixelSize: 15; anchors.right: parent.right
                     MouseArea { anchors.fill: parent; onClicked: messagesPanel.close() }
+                }
+                Rectangle {
+                    anchors.right:  parent.right
+                    anchors.rightMargin: 20
+                    width:  16; height: 16; radius: 3
+                    color:  "#eeeeee"
+                    visible: vehicleMessageModel.count > 0
+                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 10 }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            if (_activeVehicle) _activeVehicle.clearMessages()
+                            vehicleMessageModel.clear()
+                        }
+                    }
                 }
             }
 
             Flickable {
                 width:         parent.width
-                height:        Math.min(vehicleMessageList.height, 340)
+                height:        Math.min(vehicleMessagesColumn.height, 340)
                 contentWidth:  width
-                contentHeight: vehicleMessageList.height
+                contentHeight: vehicleMessagesColumn.height
                 clip:          true
 
-                VehicleMessageList {
-                    id:    vehicleMessageList
-                    width: parent.width
+                Column {
+                    id:      vehicleMessagesColumn
+                    width:   parent.width
+                    spacing: 4
+
+                    Repeater {
+                        model: vehicleMessageModel
+                        delegate: Text {
+                            width:          vehicleMessagesColumn.width
+                            wrapMode:       Text.Wrap
+                            textFormat:     Text.RichText
+                            font.pixelSize: 12
+                            text:           model.displayText
+                        }
+                    }
+
+                    Text {
+                        visible:  vehicleMessageModel.count === 0
+                        width:    vehicleMessagesColumn.width
+                        text:     "No Messages"
+                        color:    messagesPanel._msgMutedColor
+                        font.pixelSize: 12
+                    }
+                }
+            }
+
+            // Mirrors stock QGC's MainStatusIndicator "Overall Status" section
+            // (src/QmlControls/MainStatusIndicator.qml) - PX4's current
+            // health/arming-check problem list (e.g. "No manual control
+            // input"). Unlike the STATUSTEXT log above, this is a live current
+            // -state list, not an event stream, so it can't spam duplicates.
+            // The rounded-bordered box below (matching stock's
+            // SettingsGroupLayout container, src/QmlControls/SettingsGroupLayout.qml)
+            // is what reads as a "dropdown" with a single problem in it.
+            Column {
+                id:      overallStatusColumn
+                width:   parent.width
+                spacing: 6
+                visible: _activeVehicle && _healthAndArmingChecksSupported
+                          && _activeVehicle.healthAndArmingCheckReport.problemsForCurrentMode.count > 0
+
+                readonly property bool _healthAndArmingChecksSupported:
+                    _activeVehicle ? _activeVehicle.healthAndArmingCheckReport.supported : false
+
+                Rectangle { width: overallStatusColumn.width; height: 1; color: messagesPanel._msgDividerColor }
+
+                Text { text: "Overall Status"; color: messagesPanel._msgTextColor; font.pixelSize: 13; font.bold: true }
+
+                Rectangle {
+                    width:        overallStatusColumn.width
+                    height:       overallStatusRepeaterCol.implicitHeight + 16
+                    radius:       10
+                    color:        "transparent"
+                    border.color: messagesPanel._msgDividerColor
+                    border.width: 1
+
+                    Column {
+                        id:      overallStatusRepeaterCol
+                        anchors.left:           parent.left
+                        anchors.right:          parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins:        12
+                        spacing: 4
+
+                        Repeater {
+                            model: _activeVehicle ? _activeVehicle.healthAndArmingCheckReport.problemsForCurrentMode : null
+                            delegate: Text {
+                                width:          overallStatusRepeaterCol.width
+                                wrapMode:       Text.Wrap
+                                textFormat:     Text.RichText
+                                font.pixelSize: 12
+                                text:           object.message
+                                color:          object.severity === 'error'   ? _clrRed
+                                              : object.severity === 'warning' ? _clrAmber
+                                              : messagesPanel._msgTextColor
+                            }
+                        }
+                    }
                 }
             }
         }
