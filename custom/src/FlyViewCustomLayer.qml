@@ -959,7 +959,9 @@ Item {
         if (!candidate || !candidate.matched_target) {
             return "configured target"
         }
-        return candidate.matched_target.display_label || candidate.matched_target.label || "configured target"
+        var label = candidate.matched_target.display_label || candidate.matched_target.label || "configured target"
+        var rank = Number(candidate.priority_rank || candidate.matched_target.priority || 0)
+        return rank > 0 ? ("Priority " + rank + ": " + label) : label
     }
 
     function showAssetMatchCandidate(candidate) {
