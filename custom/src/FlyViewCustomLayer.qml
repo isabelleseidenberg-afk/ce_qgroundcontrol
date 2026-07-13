@@ -174,7 +174,6 @@ Item {
     readonly property var missionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
-        { label: "GAAP", task: "GAAP" },
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
         { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" }
     ]
@@ -2391,7 +2390,7 @@ Row {
                 // and it turns back off automatically when a new task is loaded.
                 // These share selectedTaskName with the task grid above (via
                 // selectMissionTask) so exactly one button in this whole section --
-                // TAKEOFF/SURVEY/GAAP/BATTLESHIP/GRIPPER/2ft Hover/Fine Tuning -- is
+                // TAKEOFF/SURVEY/BATTLESHIP/GRIPPER/2ft Hover/Fine Tuning -- is
                 // ever highlighted at a time. Same two-step flow as the grid too:
                 // clicking only selects (highlight), "Load Task" is what actually
                 // sends the command (see loadSelectedMissionTask's HOVER_2FT /
