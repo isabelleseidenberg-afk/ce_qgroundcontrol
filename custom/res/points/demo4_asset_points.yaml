@@ -8,26 +8,26 @@
 # listed here with its value (default 1).
 
 # Red
-Red Triangle: 12
+Red Triangle: 5
 Red Circle: 1
 Red Square: 1
 Red Heart: 1
 Red Star: 1
-Red Hexagon: 1
+Red Hexagon: 3
 
 # Orange
-Orange Triangle: 1
+Orange Triangle: 3
 Orange Circle: 1
-Orange Square: 1
-Orange Heart: 1
-Orange Star: 1
+Orange Square: 2
+Orange Heart: 3
+Orange Star: 5
 Orange Hexagon: 1
 
 # Yellow
 Yellow Triangle: 1
 Yellow Circle: 1
 Yellow Square: 1
-Yellow Heart: 1
+Yellow Heart: 5
 Yellow Star: 1
 Yellow Hexagon: 1
 
@@ -35,23 +35,23 @@ Yellow Hexagon: 1
 Green Triangle: 1
 Green Circle: 1
 Green Square: 1
-Green Heart: 1
+Green Heart: 3
 Green Star: 1
-Green Hexagon: 1
+Green Hexagon: 3
 
 # Blue
-Blue Triangle: 1
+Blue Triangle: 3
 Blue Circle: 1
 Blue Square: 1
-Blue Heart: 1
+Blue Heart: 5
 Blue Star: 1
 Blue Hexagon: 1
 
 # Purple
-Purple Triangle: 1
+Purple Triangle: 3
 Purple Circle: 1
 Purple Square: 1
-Purple Heart: 1
+Purple Heart: 5
 Purple Star: 1
 Purple Hexagon: 1
 

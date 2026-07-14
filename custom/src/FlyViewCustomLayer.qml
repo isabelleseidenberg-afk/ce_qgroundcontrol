@@ -118,7 +118,6 @@ Item {
     property string demo1Color: "Red"
 
     // Demo #2 state
-    property string demo2Color: "Red"
     property string demo2Shape: "Triangle"
 
     // Demo #3 & #4 state — pending selections for the "add asset" row
@@ -174,13 +173,14 @@ Item {
     readonly property var missionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
-        { label: "GAAP", task: "GAAP" },
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
-        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" }
+        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
+        { label: "GAAP", task: "GAAP" }
     ]
 
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
     property var battleshipOrigins: ({ bases: [], outfield: [] })
+    property var battleshipShipCorners: ({ bases: [], outfield: [] })
     property var battleshipTerritoryShipSets: ({})
     property bool battleshipCoordinatesLoaded: false
     property string battleshipCoordinatesError: ""
@@ -188,6 +188,7 @@ Item {
     property var _arenaOverlay
     property var _divisionLineOverlay
     property var _fobMarkers: []
+    property var _shipBoxOverlays: []
     readonly property var roundSpecOptions: [
         {
             label: "Outfield",
@@ -394,7 +395,6 @@ Item {
         selectedMissionRoundIndex = 0
         isArmed           = false
         demo1Color        = "Red"
-        demo2Color        = "Red"
         demo2Shape        = "Triangle"
         pendingColor      = "Red"
         pendingShape      = "Triangle"
@@ -404,6 +404,7 @@ Item {
         previousMissionGoalWaypoint = null
         root.clearConfirmedAssetMarkers()
         root.resetBattleshipState()
+        root.clearShipBoxOverlays()
     }
 
     // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
@@ -435,6 +436,12 @@ Item {
 
     function parseBattleshipCoordinatesYaml(text) {
         var origins = { bases: [null, null, null], outfield: [null, null, null] }
+        // 4 corners per ship, same [lat, lon] pairs as origin - used to draw each
+        // ship's box overlay (see battleshipShipBoxPaths/showTemporaryMapOverlays).
+        var corners = {
+            bases: [[null, null, null, null], [null, null, null, null], [null, null, null, null]],
+            outfield: [[null, null, null, null], [null, null, null, null], [null, null, null, null]]
+        }
         var routing = {}
         var currentShipSet = ""
         var currentShipIndex = -1
@@ -442,7 +449,10 @@ Item {
         var lines = String(text || "").split(/\r?\n/)
 
         for (var i = 0; i < lines.length; i++) {
-            var trimmed = lines[i].trim()
+            var raw = lines[i]
+            var trimmed = raw.trim()
+            if (trimmed === "" || trimmed.charAt(0) === "#") continue
+
             if (trimmed === "battleship_territory_ship_sets:") {
                 inRouting = true
                 currentShipSet = ""
@@ -458,19 +468,34 @@ Item {
                 continue
             }
 
+            // Any other unindented top-level key ends both the routing block and
+            // whichever ship block we were reading origin/corner_1..4 out of -
+            // without this, a later section (assets:, bases_fob:, ...) could get
+            // misattributed to the last ship seen.
+            if (/^\S/.test(raw)) {
+                inRouting = false
+                currentShipSet = ""
+                currentShipIndex = -1
+                continue
+            }
+
             if (inRouting) {
                 var route = trimmed.match(/^(bases|outfield):\s*(bases|outfield)$/)
                 if (route) routing[route[1]] = route[2]
                 continue
             }
 
-            if (currentShipSet !== "" && trimmed.indexOf("origin:") === 0) {
-                var origin = trimmed.match(/^origin:\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
-                if (origin) {
-                    origins[currentShipSet][currentShipIndex] = [Number(origin[1]), Number(origin[2])]
-                    currentShipSet = ""
-                    currentShipIndex = -1
-                }
+            if (currentShipSet === "") continue
+
+            var origin = trimmed.match(/^origin:\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
+            if (origin) {
+                origins[currentShipSet][currentShipIndex] = [Number(origin[1]), Number(origin[2])]
+                continue
+            }
+
+            var corner = trimmed.match(/^corner_([1-4]):\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
+            if (corner) {
+                corners[currentShipSet][currentShipIndex][Number(corner[1]) - 1] = [Number(corner[2]), Number(corner[3])]
             }
         }
 
@@ -485,9 +510,14 @@ Item {
                 if (!origins[setName][ship]) {
                     throw new Error("missing " + setName + "_ship_" + (ship + 1) + ".origin")
                 }
+                for (var c = 0; c < 4; c++) {
+                    if (!corners[setName][ship][c]) {
+                        throw new Error("missing " + setName + "_ship_" + (ship + 1) + ".corner_" + (c + 1))
+                    }
+                }
             }
         }
-        return { origins: origins, routing: routing }
+        return { origins: origins, routing: routing, corners: corners }
     }
 
     function loadBattleshipCoordinates() {
@@ -499,6 +529,7 @@ Item {
             xhr.send()
             var parsed = parseBattleshipCoordinatesYaml(xhr.responseText || "")
             battleshipOrigins = parsed.origins
+            battleshipShipCorners = parsed.corners
             battleshipTerritoryShipSets = parsed.routing
             battleshipCoordinatesLoaded = true
             console.log("Loaded battleship coordinates:", battleshipCoordinatesConfigPath)
@@ -516,6 +547,33 @@ Item {
         var origin = origins && origins[index]
         if (!origin) return null
         return { latitude: origin[0], longitude: origin[1], altitude: 2 }
+    }
+
+    // Round 3 only. Same territory->shipSet resolution as battleshipWaypoint:
+    // selecting the outfield FOB shows the bases ships (and vice versa) - the
+    // OPPOSING territory's ships are the ones this FOB's operator is meant to
+    // attack. Returns one coordinate-corner-path per ship, for a green box
+    // overlay per ship (see showTemporaryMapOverlays).
+    function battleshipShipBoxPaths() {
+        if (!battleshipCoordinatesLoaded || selectedMissionRoundId() !== 3) {
+            return []
+        }
+        var territory = selectedTerritory()
+        var shipSet = battleshipTerritoryShipSets[territory]
+        var shipsCorners = battleshipShipCorners[shipSet]
+        if (!shipsCorners) return []
+        var paths = []
+        for (var i = 0; i < shipsCorners.length; i++) {
+            var corners = shipsCorners[i]
+            if (!corners || corners.length !== 4) continue
+            var path = []
+            for (var c = 0; c < 4; c++) {
+                if (!corners[c]) { path = null; break }
+                path.push(QtPositioning.coordinate(corners[c][0], corners[c][1]))
+            }
+            if (path) paths.push(path)
+        }
+        return paths
     }
 
     function assetList() {
@@ -574,9 +632,6 @@ Item {
         if (selectedDemoIndex === 0) {
             return demo1Color.toLowerCase()
         }
-        if (selectedDemoIndex === 1) {
-            return demo2Color.toLowerCase()
-        }
         if (assetModel.count > 0) {
             return assetModel.get(0).assetColor.toLowerCase()
         }
@@ -592,7 +647,7 @@ Item {
         var territory = selectedTerritory()
         var roundId = demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId()
         if (roundId === 4) {
-            return "full_field_from_" + territory + "_enemy.plan"
+            return "full_field_from_" + territory + "_home.plan"
         }
         return "enemy_survey_from_" + territory + ".plan"
     }
@@ -704,6 +759,17 @@ Item {
             _clearMapObject(_fobMarkers[i])
         }
         _fobMarkers = []
+        clearShipBoxOverlays()
+    }
+
+    // Split out from clearTemporaryMapOverlays so Complete Demo (unlockDemo)
+    // can drop just the round-3 ship boxes without also tearing down the
+    // arena/FOB overlay, which isn't round-specific and should persist.
+    function clearShipBoxOverlays() {
+        for (var j = 0; j < _shipBoxOverlays.length; j++) {
+            _clearMapObject(_shipBoxOverlays[j])
+        }
+        _shipBoxOverlays = []
     }
 
     function clearConfirmedAssetMarkers() {
@@ -846,6 +912,17 @@ Item {
         })
         mapControl.addMapItem(wvxMarker)
         _fobMarkers.push(wvxMarker)
+
+        // Round 3 only: green box per opposing-territory ship (reuses the same
+        // arenaOverlayComponent style as the geofence, just one instance per ship).
+        var shipPaths = battleshipShipBoxPaths()
+        for (var s = 0; s < shipPaths.length; s++) {
+            var shipBox = arenaOverlayComponent.createObject(mapControl, {
+                path: shipPaths[s]
+            })
+            mapControl.addMapItem(shipBox)
+            _shipBoxOverlays.push(shipBox)
+        }
 
         mapControl.center = QtPositioning.coordinate(38.750765, -77.497116)
         if (mapControl.zoomLevel < 20) {
@@ -1999,24 +2076,6 @@ Item {
             Column {
                 Layout.fillWidth: true; spacing: 6
                 visible: demoLocked && selectedDemoIndex === 1
-                Text { text: "Asset Color"; color: _clrMuted; font.pixelSize: 11 }
-                ComboBox {
-                    id: d2Color; model: root.colorOptions; width: 236
-                    currentIndex: root.colorOptions.indexOf(root.demo2Color)
-                    onActivated: function(i) { root.demo2Color = root.colorOptions[i] }
-                    background: Rectangle { color: _clrCard; radius: 4 }
-                    contentItem: Text { text: d2Color.displayText; color: "white"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; leftPadding: 10 }
-                    popup: Popup {
-                        y: d2Color.height; width: d2Color.width; padding: 1
-                        background: Rectangle { color: _clrCard; radius: 4 }
-                        contentItem: ListView { clip: true; implicitHeight: contentHeight; model: d2Color.delegateModel }
-                    }
-                    delegate: ItemDelegate {
-                        width: d2Color.width; highlighted: d2Color.highlightedIndex === index
-                        background: Rectangle { color: highlighted ? "#444" : _clrCard }
-                        contentItem: Text { text: modelData; color: "white"; font.pixelSize: 12; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
-                    }
-                }
                 Text { text: "Target Shape"; color: _clrMuted; font.pixelSize: 11 }
                 ComboBox {
                     id: d2Shape; model: root.shapeOptions; width: 236
@@ -2391,7 +2450,7 @@ Row {
                 // and it turns back off automatically when a new task is loaded.
                 // These share selectedTaskName with the task grid above (via
                 // selectMissionTask) so exactly one button in this whole section --
-                // TAKEOFF/SURVEY/GAAP/BATTLESHIP/GRIPPER/2ft Hover/Fine Tuning -- is
+                // TAKEOFF/SURVEY/BATTLESHIP/GRIPPER/GAAP/2ft Hover/Fine Tuning -- is
                 // ever highlighted at a time. Same two-step flow as the grid too:
                 // clicking only selects (highlight), "Load Task" is what actually
                 // sends the command (see loadSelectedMissionTask's HOVER_2FT /
