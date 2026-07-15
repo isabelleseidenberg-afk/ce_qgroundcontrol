@@ -182,8 +182,12 @@ Item {
     property var battleshipOrigins: ({ bases: [], outfield: [] })
     property var battleshipShipCorners: ({ bases: [], outfield: [] })
     property var battleshipTerritoryShipSets: ({})
+    property var configuredHomeOrigins: ({ bases: null, outfield: null })
     property bool battleshipCoordinatesLoaded: false
     property string battleshipCoordinatesError: ""
+    property string homeLockStatus: "HOME NOT CONFIGURED"
+    property string homeLockReason: ""
+    property bool homeGroundContact: false
 
     property var _arenaOverlay
     property var _divisionLineOverlay
@@ -436,6 +440,7 @@ Item {
 
     function parseBattleshipCoordinatesYaml(text) {
         var origins = { bases: [null, null, null], outfield: [null, null, null] }
+        var homeOrigins = { bases: null, outfield: null }
         // 4 corners per ship, same [lat, lon] pairs as origin - used to draw each
         // ship's box overlay (see battleshipShipBoxPaths/showTemporaryMapOverlays).
         var corners = {
@@ -445,6 +450,7 @@ Item {
         var routing = {}
         var currentShipSet = ""
         var currentShipIndex = -1
+        var currentFobTerritory = ""
         var inRouting = false
         var lines = String(text || "").split(/\r?\n/)
 
@@ -457,6 +463,16 @@ Item {
                 inRouting = true
                 currentShipSet = ""
                 currentShipIndex = -1
+                currentFobTerritory = ""
+                continue
+            }
+
+            var fobHeader = trimmed.match(/^(bases|outfield)_fob:$/)
+            if (fobHeader) {
+                inRouting = false
+                currentShipSet = ""
+                currentShipIndex = -1
+                currentFobTerritory = fobHeader[1]
                 continue
             }
 
@@ -465,6 +481,7 @@ Item {
                 inRouting = false
                 currentShipSet = shipHeader[1]
                 currentShipIndex = Number(shipHeader[2]) - 1
+                currentFobTerritory = ""
                 continue
             }
 
@@ -476,6 +493,7 @@ Item {
                 inRouting = false
                 currentShipSet = ""
                 currentShipIndex = -1
+                currentFobTerritory = ""
                 continue
             }
 
@@ -485,14 +503,18 @@ Item {
                 continue
             }
 
-            if (currentShipSet === "") continue
-
             var origin = trimmed.match(/^origin:\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
             if (origin) {
-                origins[currentShipSet][currentShipIndex] = [Number(origin[1]), Number(origin[2])]
+                var coordinate = [Number(origin[1]), Number(origin[2])]
+                if (currentFobTerritory !== "") {
+                    homeOrigins[currentFobTerritory] = coordinate
+                } else if (currentShipSet !== "") {
+                    origins[currentShipSet][currentShipIndex] = coordinate
+                }
                 continue
             }
 
+            if (currentShipSet === "") continue
             var corner = trimmed.match(/^corner_([1-4]):\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
             if (corner) {
                 corners[currentShipSet][currentShipIndex][Number(corner[1]) - 1] = [Number(corner[2]), Number(corner[3])]
@@ -506,6 +528,9 @@ Item {
             throw new Error("missing battleship territory mapping for outfield")
         }
         for (var setName of ["bases", "outfield"]) {
+            if (!homeOrigins[setName]) {
+                throw new Error("missing " + setName + "_fob.origin for fixed PX4 home")
+            }
             for (var ship = 0; ship < 3; ship++) {
                 if (!origins[setName][ship]) {
                     throw new Error("missing " + setName + "_ship_" + (ship + 1) + ".origin")
@@ -517,7 +542,7 @@ Item {
                 }
             }
         }
-        return { origins: origins, routing: routing, corners: corners }
+        return { origins: origins, routing: routing, corners: corners, homeOrigins: homeOrigins }
     }
 
     function loadBattleshipCoordinates() {
@@ -531,6 +556,7 @@ Item {
             battleshipOrigins = parsed.origins
             battleshipShipCorners = parsed.corners
             battleshipTerritoryShipSets = parsed.routing
+            configuredHomeOrigins = parsed.homeOrigins
             battleshipCoordinatesLoaded = true
             console.log("Loaded battleship coordinates:", battleshipCoordinatesConfigPath)
         } catch (err) {
@@ -547,6 +573,13 @@ Item {
         var origin = origins && origins[index]
         if (!origin) return null
         return { latitude: origin[0], longitude: origin[1], altitude: 2 }
+    }
+
+    function configuredHomeCoordinate() {
+        if (!battleshipCoordinatesLoaded) return null
+        var origin = configuredHomeOrigins[selectedTerritory()]
+        if (!origin) return null
+        return { latitude: origin[0], longitude: origin[1] }
     }
 
     // Round 3 only. Same territory->shipSet resolution as battleshipWaypoint:
@@ -713,6 +746,7 @@ Item {
             geofence_height_ft: 30,
             camera_mode: cameraMode,
             survey_plan_file: selectedSurveyPlanFile(),
+            home_coordinate: configuredHomeCoordinate(),
             demo_name: demoLocked ? root.demoNames[selectedDemoIndex] : "",
             assets: assetList()
         }
@@ -720,6 +754,11 @@ Item {
 
     function sendRoundConfig() {
         root.bridgeSendStatus = "Sending: ROUND_CONFIG R" + selectedMissionRoundId()
+        if (!configuredHomeCoordinate()) {
+            root.bridgeSendStatus = "Send blocked: fixed home coordinate unavailable"
+            root.missionStatusText = battleshipCoordinatesError || "Reload shared coordinate configuration"
+            return
+        }
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
             return
@@ -995,6 +1034,10 @@ Item {
             latestMissionGoalWaypoint = status.active_goal_waypoint
         }
         var px4Reason = ""
+        var px4Status = status.px4_control_status || {}
+        homeLockStatus = px4Status.home_status || homeLockStatus
+        homeLockReason = px4Status.home_reason || ""
+        homeGroundContact = px4Status.ground_contact === true
         if (status.px4_control_ready === false && status.px4_control_ready_reason) {
             px4Reason = "PX4: " + status.px4_control_ready_reason
         }
@@ -1185,6 +1228,10 @@ Item {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = "IDLE"
             missionStatusText = "Kill reset requested — vehicle remains disarmed"
+            return
+        }
+        if (commandName === "RESTORE_HOME") {
+            missionStatusText = "Restore home requested"
             return
         }
         if (commandName === "RETURN_HOME") {
@@ -2765,7 +2812,7 @@ Row {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Center: Arm | Hold Position | Land Mission | Return To Home | Complete Demo | Kill Switch
+    // Center: Arm | Hold | Land | Restore Home | RTL | Complete Demo | Reset Kill | Kill
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -2859,6 +2906,30 @@ Row {
                     onClicked: {
                         root.sendMissionCommand("LAND_MISSION")
                     }
+                }
+            }
+
+            // Return to Home — ROS sends PX4 RTL (demo reset is the COMPLETE DEMO button)
+            Rectangle {
+                id: restoreHomeBtn
+                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
+                readonly property bool canRestore: demoLocked && homeGroundContact && !vehArmed
+                width: restoreHomeLbl.width + 28; height: 38; radius: 6
+                color: homeLockStatus === "HOME LOCKED" ? _clrGreen : (canRestore ? _clrBlue : _clrCard)
+                opacity: canRestore ? 1.0 : 0.55
+                border.color: _clrMuted; border.width: 1
+                ToolTip.visible: restoreHomeHover.hovered
+                ToolTip.text: homeLockStatus + (homeLockReason ? (": " + homeLockReason) : "")
+                HoverHandler { id: restoreHomeHover }
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: restoreHomeLbl; text: "RESTORE HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: restoreHomeBtn.canRestore
+                    onClicked: root.sendMissionCommand("RESTORE_HOME")
                 }
             }
 
