@@ -306,9 +306,14 @@ Item {
         selectedDemoIndex = index
         selectedMissionRoundIndex = index
         demoLocked        = true
-        // Points Round: populate the scoring table from the default YAML the first
-        // time it is opened. The operator can reload / point at their own file.
-        if (index === 3 && demo4PointsModel.count === 0) {
+        // Points Round: (re)populate the scoring table from the default YAML
+        // every time round 4 is selected, resetting demo4PointsPath back to
+        // the default even if the operator had pointed it at a custom file in
+        // a previous session - so re-selecting round 4 always starts from the
+        // live default file rather than silently keeping stale/custom data.
+        // The operator can still reload / point at their own file afterward.
+        if (index === 3) {
+            root.demo4PointsPath = root._demo4DefaultPointsPath
             root.loadDemo4Points(root.demo4PointsPath)
         }
     }
@@ -409,6 +414,9 @@ Item {
         root.clearConfirmedAssetMarkers()
         root.resetBattleshipState()
         root.clearShipBoxOverlays()
+        demo4TotalPoints = 0
+        demo4ConfirmedAssetsModel.clear()
+        demo4LoadConfirmVisible = false
     }
 
     // Round 3 (Battleship, demo index 2): each asset must be returned to a specific
@@ -1100,6 +1108,25 @@ Item {
         assetMatchPopup.open()
     }
 
+    // Demo #4 (Points Round): look up a confirmed candidate's point value in
+    // demo4PointsModel (loaded from demo4_asset_points.yaml). Matched by
+    // color+shape, case-insensitive since the AI detection pipeline's strings
+    // aren't guaranteed to match the YAML's casing exactly. Colorless specials
+    // (Grenade/Jet Boat/Grey Tank) have an empty color on both sides. Returns 0
+    // or an unrecognized asset just doesn't add to the total.
+    function demo4PointsForCandidate(candidate) {
+        if (!candidate) return 0
+        var color = String(candidate.detected_color || "").toLowerCase()
+        var shape = String(candidate.detected_shape || "").toLowerCase()
+        if (shape.length === 0) return 0
+        for (var i = 0; i < demo4PointsModel.count; i++) {
+            var entry = demo4PointsModel.get(i)
+            if (String(entry.shape || "").toLowerCase() !== shape) continue
+            if (String(entry.color || "").toLowerCase() === color) return entry.points
+        }
+        return 0
+    }
+
     function resolveAssetMatchCandidate(approved) {
         if (!pendingAssetMatch) {
             return
@@ -1112,6 +1139,14 @@ Item {
         })
         if (approved) {
             root.addConfirmedAssetMarker(candidate)
+            if (demoLocked && selectedDemoIndex === 3) {
+                var pts = root.demo4PointsForCandidate(candidate)
+                root.demo4TotalPoints += pts
+                demo4ConfirmedAssetsModel.append({
+                    label: root.assetCandidateText(candidate),
+                    points: pts
+                })
+            }
         }
         root.sendMissionCommand("RESUME", { candidate_id: candidateId })
         missionStatusText = approved ? "Target approved" : "Target rejected"
@@ -1297,19 +1332,28 @@ Item {
     // points entry so the customer can change scoring on the fly by editing the
     // YAML instead of re-typing values.
     ListModel { id: demo4PointsModel }
-    // The DEFAULT path is a Qt resource (":/…") compiled into the QGC binary by
-    // custom.qrc, so editing res/points/demo4_asset_points.yaml on disk has NO effect
-    // until QGC is rebuilt (rcc re-bakes the resource at build time).
-    //
-    // To change scoring WITHOUT a rebuild, the operator does not touch the resource:
-    // they add their own YAML anywhere on disk, type its absolute path into the path
-    // field in the left panel, and click Load. loadDemo4Points() then reads that file
-    // live off disk (file://) every time Load is pressed. So "add a file in + Load" is
-    // the live-edit path; the compiled-in resource is only the guaranteed default.
-    readonly property string _demo4DefaultPointsPath: ":/Custom/qml/points/demo4_asset_points.yaml"
+    // The DEFAULT path is now the live ce_lcp file directly (an absolute path,
+    // not the ":/…" Qt resource custom.qrc also bundles) - loadDemo4Points()
+    // reads absolute paths straight off disk (file://) every time it runs, so
+    // editing this file and reloading (or just re-locking round 4) picks up
+    // new scoring with NO rebuild required. asset_match_node in ce_lcp reads
+    // the same file (see asset_match_node.py's _default_round4_points_path())
+    // for its round 4 confirm-prompt shortlist, so both sides stay in sync.
+    // The compiled-in ":/Custom/qml/points/demo4_asset_points.yaml" resource
+    // still exists as a fallback the operator can manually type in if this
+    // path is ever unavailable (e.g. running QGC on a machine without ce_lcp
+    // checked out at this exact path).
+    readonly property string _demo4DefaultPointsPath: "/home/julieherrick/ce_lcp/C2_delivery/demo4_asset_points.yaml"
     property string demo4PointsPath:   _demo4DefaultPointsPath
     property bool   demo4PointsLoaded:  false
     property string demo4PointsStatus:  ""
+    property bool   demo4LoadConfirmVisible: false
+
+    // Running score for Demo #4 (Points Round): each row an operator confirms
+    // (resolveAssetMatchCandidate) adds its looked-up demo4_asset_points.yaml
+    // value here. See demo4PointsForCandidate() / resolveAssetMatchCandidate().
+    property int demo4TotalPoints: 0
+    ListModel { id: demo4ConfirmedAssetsModel }
 
     Component.onCompleted: {
         loadBattleshipCoordinates()
@@ -2231,6 +2275,29 @@ Item {
                 }
             }
 
+            // Demo #4 (Points Round) — running score. Points are added when the
+            // operator confirms a detected asset (resolveAssetMatchCandidate),
+            // looked up from the loaded demo4_asset_points.yaml scoring table.
+            Column {
+                Layout.fillWidth: true; spacing: 6
+                visible: demoLocked && selectedDemoIndex === 3
+                Text {
+                    text: "Total Round Points: " + root.demo4TotalPoints
+                    color: "white"; font.pixelSize: 13; font.bold: true
+                }
+                Column {
+                    spacing: 2; width: 236
+                    Repeater {
+                        model: demo4ConfirmedAssetsModel
+                        delegate: Text {
+                            text: model.label + " — " + model.points + " pt" + (model.points === 1 ? "" : "s")
+                            color: _clrMuted
+                            font.pixelSize: 11
+                        }
+                    }
+                }
+            }
+
             // Demo #4 (Points Round) — asset point values loaded from a YAML scoring
             // table instead of typed per asset. Editing the YAML lets the customer
             // change scoring on the fly; every possible asset is listed with its value
@@ -2262,8 +2329,24 @@ Item {
                             onClicked: {
                                 root.demo4PointsPath = demo4PathField.text
                                 root.loadDemo4Points(demo4PathField.text)
+                                root.demo4LoadConfirmVisible = true
+                                demo4LoadConfirmTimer.restart()
                             }
                         }
+                    }
+                }
+                // Transient confirmation shown only right after a Load click - auto-hides
+                // itself after a few seconds via demo4LoadConfirmTimer.
+                Text {
+                    visible: root.demo4LoadConfirmVisible
+                    text: (root.demo4PointsLoaded ? "✓ " : "⚠ ") + root.demo4PointsStatus
+                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
+                    font.pixelSize: 11
+                    font.bold: true
+                    Timer {
+                        id: demo4LoadConfirmTimer
+                        interval: 3000
+                        onTriggered: root.demo4LoadConfirmVisible = false
                     }
                 }
                 // Reference-only dropdown: press to browse every asset/color combo and
@@ -2301,12 +2384,6 @@ Item {
                             Text { text: model.points + " pt"; color: _clrGreen; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
                         }
                     }
-                }
-                Text {
-                    visible: root.demo4PointsStatus.length > 0
-                    text: root.demo4PointsStatus
-                    color: root.demo4PointsLoaded ? _clrGreen : _clrAmber
-                    font.pixelSize: 10
                 }
             }
 
