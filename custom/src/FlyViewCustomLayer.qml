@@ -176,7 +176,7 @@ Item {
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
         { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
         { label: "GAAP", task: "GAAP" },
-        { label: "NO ACTION", task: "NO_ACTION" }
+        { label: "HANDHELD CONTROLLER", task: "MANUAL" }
     ]
 
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
@@ -1245,6 +1245,14 @@ Item {
             root.sendMissionCommand("FINE_TUNE_MODE")
             return
         }
+        // "Handheld Controller" is not a mission_manager task -- it forces PX4 into
+        // Manual mode directly over MAVLink, same mechanism as the top-right MODE
+        // dropdown (_activeVehicle.flightMode), not RUN_TASK.
+        if (selectedTaskName === "MANUAL") {
+            root.fineTuningActive = false
+            if (_activeVehicle) _activeVehicle.flightMode = "Manual"
+            return
+        }
 
         root.fineTuningActive = false
         var payload = {
@@ -1508,7 +1516,7 @@ Item {
                     anchors.centerIn: parent
                     text: label
                     color: markerTextColor
-                    font.pixelSize: 10
+                    font.pixelSize: 9
                     font.bold: true
                 }
             }

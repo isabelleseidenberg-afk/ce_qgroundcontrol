@@ -34,7 +34,7 @@ Item {
 
     property var    margins:                    ScreenTools.defaultFontPixelWidth
     property var    panelRadius:                ScreenTools.defaultFontPixelWidth * 0.5
-    property var    buttonHeight:               height * 1.6
+    property var    buttonHeight:               height * 1.6 * 0.5
     property var    squareButtonPadding:        ScreenTools.defaultFontPixelWidth
     property var    separatorHeight:            buttonHeight * 0.9
     property var    settingsPanelVisible:       false
@@ -353,8 +353,8 @@ Item {
     QGCColoredImage {
         id:                      gimbalIndicatorIcon
         width:                   height
-        anchors.top:             parent.top
-        anchors.bottom:          parent.bottom
+        height:                  parent.height * 0.5
+        anchors.verticalCenter:  parent.verticalCenter
         source:                  "/gimbal/payload.svg"
         fillMode:                Image.PreserveAspectFit
         sourceSize.height:       height
