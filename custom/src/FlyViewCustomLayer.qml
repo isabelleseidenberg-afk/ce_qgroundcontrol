@@ -138,16 +138,16 @@ Item {
     property int selectedMissionRoundIndex: 0
     property string selectedMissionMode: "MANUAL_STEP"
     property int selectedManualTaskIndex: 0
-    property string selectedTaskName: "TAKEOFF"
+    property string selectedTaskName: "NO_ACTION"
     property bool fineTuningActive: false
-    property string selectedTaskLabel: "TAKEOFF"
+    property string selectedTaskLabel: "NO ACTION"
     property string selectedGripperAction: ""
     property string selectedBattleshipDestinationId: ""
     property var completedBattleshipDestinations: ({})
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
-    property string selectedTaskDisplay: "Selected: TAKEOFF"
+    property string selectedTaskDisplay: "Selected: NO ACTION"
     property string missionStatusText: "Waiting for operator command"
     property var pendingAssetMatch: null
     property var latestMissionGoalWaypoint: null
@@ -175,7 +175,8 @@ Item {
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
         { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
         { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
-        { label: "GAAP", task: "GAAP" }
+        { label: "GAAP", task: "GAAP" },
+        { label: "NO ACTION", task: "NO_ACTION" }
     ]
 
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
@@ -316,6 +317,12 @@ Item {
             root.demo4PointsPath = root._demo4DefaultPointsPath
             root.loadDemo4Points(root.demo4PointsPath)
         }
+        // Redraw map overlays on every round change, not just territory changes:
+        // battleshipShipBoxPaths() only returns ships for round 3, so switching
+        // into/out of Battleship needs its own refresh - otherwise picking Round 3
+        // after territory was already selected leaves the ship boxes undrawn
+        // until the operator happens to touch the territory dropdown too.
+        showTemporaryMapOverlays()
     }
 
     // Parse a flat-mapping YAML scoring table: lines of "<Color> <Shape>: <points>"
@@ -779,12 +786,67 @@ Item {
         root.displaySelectedSurveyPlan()
     }
 
+    // True once the plan controller is connected to a vehicle and idle -- the two
+    // preconditions PlanMasterController.sendToVehicle() requires (it warns and
+    // no-ops otherwise, per PlanMasterController::sendToVehicle in upstream QGC).
+    readonly property bool _canUploadPlanToVehicle: !!_planMasterController
+                                                      && !_planMasterController.offline
+                                                      && !_planMasterController.syncInProgress
+
+    // Territory selection is visual only (the division line + arena overlay drawn
+    // by showTemporaryMapOverlays) - it must NOT touch _planMasterController, since
+    // loadFromFile()/sendToVehicle() here would replace the full-field geofence
+    // (deployFullFieldGeofence, the only geofence actually enforced on the vehicle)
+    // with a narrower per-territory one. roundSpec.geofenceFilePath is still read
+    // directly (enemyGeofenceFromPlan) for the ROS geofence *monitor's* territory
+    // tracking in roundConfigMessage() - that's a separate, software-side polygon
+    // check for game logic, not a flight-boundary upload.
     function deploySelectedGeofence() {
-        var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
-        if (_planMasterController && roundSpec.geofenceFilePath) {
-            _planMasterController.loadFromFile(roundSpec.geofenceFilePath)
-        }
         showTemporaryMapOverlays()
+    }
+
+    // Auto-deploy on launch so the vehicle always has a geofence covering the
+    // whole arena as a safety floor, even before an operator picks a round/territory
+    // and sends round config (which would otherwise deploy a narrower per-territory
+    // fence). loadFromFile() only stages the fence in QGC's local plan editor --
+    // actually enforcing it on the vehicle needs sendToVehicle(), which requires
+    // being connected, so that part is retried (by the Connections block below and
+    // the fallback Timer) until a vehicle is actually online.
+    property bool _fullFieldGeofenceLoaded: false
+    property bool _fullFieldGeofenceUploaded: false
+    readonly property string _fullFieldGeofencePath: ":/Custom/qml/geofences/ce_geofence_full_field.plan"
+
+    function deployFullFieldGeofence() {
+        if (!_planMasterController) {
+            return
+        }
+        if (!_fullFieldGeofenceLoaded) {
+            _planMasterController.loadFromFile(_fullFieldGeofencePath)
+            _fullFieldGeofenceLoaded = true
+        }
+        if (!_fullFieldGeofenceUploaded && _canUploadPlanToVehicle) {
+            _planMasterController.sendToVehicle()
+            _fullFieldGeofenceUploaded = true
+        }
+    }
+
+    // Reacts quickly once _planMasterController already has a vehicle target and its
+    // offline/syncInProgress state changes. Connections retargets itself automatically
+    // whenever _planMasterController is reassigned (e.g. null -> ready).
+    Connections {
+        target: _planMasterController
+        function onOfflineChanged() { deployFullFieldGeofence() }
+        function onSyncInProgressChanged() { deployFullFieldGeofence() }
+    }
+
+    // Fallback for the null -> ready transition itself, which Connections retargeting
+    // does not fire a handler for on its own (only for signals emitted *after*
+    // retargeting). Self-stops once uploaded.
+    Timer {
+        interval: 1000
+        repeat: true
+        running: !_fullFieldGeofenceUploaded
+        onTriggered: deployFullFieldGeofence()
     }
 
     function _clearMapObject(object) {
@@ -1358,6 +1420,7 @@ Item {
     Component.onCompleted: {
         loadBattleshipCoordinates()
         showTemporaryMapOverlays()
+        deployFullFieldGeofence()
     }
     Component.onDestruction: {
         clearTemporaryMapOverlays()
@@ -2923,8 +2986,9 @@ Row {
 
             Item { Layout.fillWidth: true }
 
-            // Arm — manual (re-)arm. Issues a real PX4 arm via ROS
-            // (sendMissionCommand("ARM") -> px4_command_bridge -> COMPONENT_ARM_DISARM).
+            // Arm/Disarm — manual (re-)arm, or disarm if already armed. Issues a real
+            // PX4 arm/disarm via ROS (sendMissionCommand("ARM"/"DISARM") ->
+            // px4_command_bridge -> COMPONENT_ARM_DISARM).
             //
             // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
             // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
@@ -2949,7 +3013,7 @@ Row {
                 MouseArea {
                     anchors.fill: parent
                     onClicked: {
-                        root.sendMissionCommand("ARM")
+                        root.sendMissionCommand(armBtn.vehArmed ? "DISARM" : "ARM")
                     }
                 }
             }
@@ -2983,30 +3047,6 @@ Row {
                     onClicked: {
                         root.sendMissionCommand("LAND_MISSION")
                     }
-                }
-            }
-
-            // Return to Home — ROS sends PX4 RTL (demo reset is the COMPLETE DEMO button)
-            Rectangle {
-                id: restoreHomeBtn
-                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
-                readonly property bool canRestore: demoLocked && homeGroundContact && !vehArmed
-                width: restoreHomeLbl.width + 28; height: 38; radius: 6
-                color: homeLockStatus === "HOME LOCKED" ? _clrGreen : (canRestore ? _clrBlue : _clrCard)
-                opacity: canRestore ? 1.0 : 0.55
-                border.color: _clrMuted; border.width: 1
-                ToolTip.visible: restoreHomeHover.hovered
-                ToolTip.text: homeLockStatus + (homeLockReason ? (": " + homeLockReason) : "")
-                HoverHandler { id: restoreHomeHover }
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: restoreHomeLbl; text: "RESTORE HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: restoreHomeBtn.canRestore
-                    onClicked: root.sendMissionCommand("RESTORE_HOME")
                 }
             }
 
@@ -3046,25 +3086,6 @@ Row {
 
             // Kill Switch — emergency stop intent
             Rectangle {
-                id: resetKillBtn
-                readonly property bool canRequestReset: !_activeVehicle || !_activeVehicle.armed
-                width: resetKillLbl.width + 28; height: 38; radius: 6
-                color: canRequestReset ? _clrOrange : _clrCard
-                opacity: canRequestReset ? 1.0 : 0.55
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "↺"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: resetKillLbl; text: "RESET KILL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: resetKillBtn.canRequestReset
-                    onClicked: resetKillConfirmPopup.open()
-                }
-            }
-
-            // Kill Switch — emergency stop intent
-            Rectangle {
                 width: landLbl.width + 32; height: 38; color: _clrKill; radius: 6
                 Row {
                     anchors.centerIn: parent; spacing: 6
@@ -3083,6 +3104,140 @@ Row {
             }
 
             Item { Layout.fillWidth: true }
+
+            // Debug — grey, far right. Expands (via debugPopup) to reveal Restore Home,
+            // Reset Kill, and stock QGC's own Messages/status and GPS indicators - all
+            // tucked away here since none is needed in normal operation: home now
+            // restores/verifies automatically before every arm, reset-kill is a rare
+            // ground-safety recovery action, and Messages/GPS are stock QGC components
+            // mounted for debugging (the CrownEagle FlyView hides QGC's stock toolbar
+            // that would normally show them, same Loader pattern as the gimbal indicator
+            // in FlyViewWidgetLayer.qml).
+            Rectangle {
+                id: debugBtn
+                width: debugLbl.width + 28; height: 38; radius: 6; color: _clrMuted
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "⚙"; color: "white"; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: debugLbl; text: "DEBUG"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: debugPopup.visible = !debugPopup.visible
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: debugPopup
+        modal: false
+        focus: false
+        closePolicy: Popup.CloseOnPressOutside
+        width: 260
+        padding: 10
+        x: Math.max(12, root.width - width - 12)
+        y: Math.max(_topBarHeight + 12, root.height - _bottomBarHeight - height - 12)
+        z: 1300
+        background: Rectangle { color: _clrPanel; border.color: _clrMuted; border.width: 1; radius: 8 }
+        contentItem: Column {
+            spacing: 10
+
+            // Stock QGC's own Messages/status indicator (message log + "Overall
+            // Status" health/arming-check list) and GPS/satellite indicator, mounted
+            // directly since the stock toolbar that normally hosts them is hidden.
+            // Sharing one bar, spaced apart rather than stacked. _clrCard (not white)
+            // since both components render qgcPal.text, which is white/light under
+            // this app's dark theme - white-on-white would be illegible.
+            Rectangle {
+                width: parent.width; height: 38; radius: 6
+                color: _clrCard
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 24
+                    Loader {
+                        height: 30
+                        source: "qrc:/qml/QGroundControl/Controls/MainStatusIndicator.qml"
+                    }
+                    Loader {
+                        height: 30
+                        source: "qrc:/qml/QGroundControl/Toolbar/VehicleGPSIndicator.qml"
+                    }
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: _clrMuted; opacity: 0.4 }
+
+            // Mirrors the main mission status line (missionStatusText, see line ~2563)
+            // so feedback from Restore Home / Reset Kill is visible right here without
+            // closing this popup to go look at the mission panel on the other side of
+            // the screen.
+            Text {
+                width: parent.width
+                text: missionStatusText
+                color: _clrAmber
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+            }
+
+            // Restore Home — ROS asks px4_control_node to (re-)send and verify the
+            // configured fixed home while landed/disarmed. Manual retry only: home
+            // now restores and is gated before every arm automatically on its own.
+            Rectangle {
+                id: restoreHomeBtn
+                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
+                readonly property bool canRestore: demoLocked && homeGroundContact && !vehArmed
+                width: parent.width; height: 38; radius: 6
+                color: homeLockStatus === "HOME LOCKED" ? _clrGreen : (canRestore ? _clrBlue : _clrCard)
+                opacity: canRestore ? 1.0 : 0.55
+                border.color: _clrMuted; border.width: 1
+                HoverHandler { id: restoreHomeHover }
+                // Explicit ToolTip (not the attached ToolTip.visible/.text shorthand)
+                // parented straight to the window's Overlay with a z above debugPopup's
+                // (1300) - this button lives inside another Popup's contentItem, and the
+                // implicit attached tooltip was getting painted under debugPopup's own
+                // later Column siblings instead of on top of the whole popup.
+                ToolTip {
+                    parent:  Overlay.overlay
+                    visible: restoreHomeHover.hovered
+                    text:    homeLockStatus + (homeLockReason ? (": " + homeLockReason) : "")
+                    x:       restoreHomeBtn.mapToItem(Overlay.overlay, 0, 0).x
+                    y:       restoreHomeBtn.mapToItem(Overlay.overlay, 0, 0).y - height - 4
+                    z:       1500
+                }
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "RESTORE HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: restoreHomeBtn.canRestore
+                    onClicked: root.sendMissionCommand("RESTORE_HOME")
+                }
+            }
+
+            // Reset Kill — ground-safety lockout reset (rare recovery action).
+            Rectangle {
+                id: resetKillBtn
+                readonly property bool canRequestReset: !_activeVehicle || !_activeVehicle.armed
+                width: parent.width; height: 38; radius: 6
+                color: canRequestReset ? _clrOrange : _clrCard
+                opacity: canRequestReset ? 1.0 : 0.55
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "↺"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "RESET KILL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: resetKillBtn.canRequestReset
+                    onClicked: {
+                        debugPopup.visible = false
+                        resetKillConfirmPopup.open()
+                    }
+                }
+            }
         }
     }
 
