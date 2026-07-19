@@ -173,8 +173,6 @@ Item {
     readonly property var missionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
-        { label: "GRIPPER CLOSE", task: "GRIPPER", gripper_action: "CLOSE" },
-        { label: "GRIPPER OPEN", task: "GRIPPER", gripper_action: "OPEN" },
         { label: "GAAP", task: "GAAP" },
         { label: "HANDHELD CONTROLLER", task: "MANUAL" }
     ]
@@ -748,7 +746,7 @@ Item {
         var roundSpec = roundSpecOptions[selectedRoundSpecIndex]
         return {
             type: "round_config",
-            round_id: demoLocked ? selectedDemoIndex + 1 : 0,
+            round_id: demoLocked ? selectedDemoIndex + 1 : selectedMissionRoundId(),
             territory: selectedTerritory(),
             target_class: targetClass(),
             asset_color: assetColor(),
@@ -1340,8 +1338,8 @@ Item {
             return
         }
         if (commandName === "RETURN_HOME") {
-            missionTaskDisplay = "RTL"
-            missionStatusText = "RTL sent"
+            missionTaskDisplay = "GO_TO_WAYPOINT"
+            missionStatusText = "Returning to home base"
             return
         }
         if (commandName === "DISARM") {
@@ -3058,7 +3056,11 @@ Row {
                 }
             }
 
-            // Return to Home — ROS sends PX4 RTL (demo reset is the COMPLETE DEMO button)
+            // Return to Home — flies GO_TO_WAYPOINT to this round's configured FOB
+            // (like a battleship waypoint) under ROS/AUTONOMY control, then lands once
+            // it arrives (mission_manager_node.start_return_home / qgc_ros_bridge_node
+            // watches for arrival before sending LAND). No longer native PX4 RTL to the
+            // arm/launch point. (demo reset is the COMPLETE DEMO button)
             Rectangle {
                 width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
                 Row {
@@ -3433,7 +3435,7 @@ Row {
                     { n: "ARM",             d: "Spin up the motors manually. Usually NOT needed — Start Mission arms by itself. Green = armed, blue = disarmed." },
                     { n: "HOLD POSITION",   d: "Stop and hover in place. The drone must already be flying." },
                     { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
-                    { n: "RETURN TO HOME",  d: "Fly back to the launch point and land there." },
+                    { n: "RETURN TO HOME",  d: "Fly to this round's configured home base (FOB) and land there." },
                     { n: "COMPLETE DEMO",   d: "End the run and clear the round so you can set up a new demo." },
                     { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." }
                 ]
