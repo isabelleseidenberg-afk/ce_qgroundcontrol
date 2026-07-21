@@ -30,14 +30,14 @@
     },
     "groundStation": "QGroundControl",
     "mission": {
-        "cruiseSpeed": 5,
+        "cruiseSpeed": 1.34112,
         "firmwareType": 12,
         "globalPlanAltitudeMode": 1,
-        "hoverSpeed": 3,
+        "hoverSpeed": 1.34112,
         "items": [
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 22,
@@ -56,7 +56,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -75,7 +75,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -94,7 +94,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -113,7 +113,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -132,7 +132,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -151,7 +151,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -170,7 +170,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,
@@ -189,7 +189,7 @@
             },
             {
                 "AMSLAltAboveTerrain": null,
-                "Altitude": 2,
+                "Altitude": 2.1336,
                 "AltitudeMode": 1,
                 "autoContinue": true,
                 "command": 16,

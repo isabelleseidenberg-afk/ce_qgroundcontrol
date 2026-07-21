@@ -47,6 +47,10 @@ Item {
 
     property var _planMasterController: globals.planMasterControllerFlyView
     property var _missionController:    _planMasterController ? _planMasterController.missionController : null
+    // Plan View has its own separate PlanMasterController (offline mission editor).
+    // Send Config also loads the survey plan here so it shows up when the operator
+    // switches to the Plan tab, not just as a Fly View map overlay.
+    property var _planViewMasterController: globals.planMasterControllerPlanView
     property int _currentWpIndex:       _missionController ? _missionController.currentMissionIndex    : 0
     property int _totalWpCount:         _missionController ? _missionController.missionItemCount       : 0
     property var _activeWpItem:         (_missionController && _missionController.visualItems && _currentWpIndex < _missionController.visualItems.count)
@@ -707,17 +711,31 @@ Item {
     }
 
     function displaySelectedSurveyPlan() {
+        var path = selectedSurveyPlanResourcePath()
         if (_planMasterController) {
-            var path = selectedSurveyPlanResourcePath()
             console.log("Loading C&E survey plan:", path)
             _planMasterController.loadFromFile(path)
         }
+        if (_planViewMasterController) {
+            // Also stage it in the actual Plan View editor so it's there when the
+            // operator switches to the Plan tab, not just overlaid on the map.
+            _planViewMasterController.loadFromFile(path)
+        }
     }
 
+    // Clears mission waypoints only -- NOT the geofence or rally points -- so
+    // Complete Demo (unlockDemo) can reset the flight plan between rounds while
+    // leaving whatever geofence is currently deployed on the vehicle untouched.
+    // Uses PlanMasterController::removeMissionOnly() rather than reaching into
+    // MissionController directly, since MissionController::removeAll() isn't
+    // Q_INVOKABLE (not exposed to QML).
     function clearDisplayedSurveyPlan() {
         if (_planMasterController) {
             console.log("Clearing C&E survey plan from map")
-            _planMasterController.removeAll()
+            _planMasterController.removeMissionOnly()
+        }
+        if (_planViewMasterController) {
+            _planViewMasterController.removeMissionOnly()
         }
     }
 

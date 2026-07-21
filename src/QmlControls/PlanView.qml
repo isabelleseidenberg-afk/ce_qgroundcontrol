@@ -41,6 +41,12 @@ Item {
     readonly property var   _defaultVehicleCoordinate:  QtPositioning.coordinate(37.803784, -122.462276)
     readonly property bool  _waypointsOnlyMode:         QGroundControl.corePlugin.options.missionWaypointsOnly
 
+    // Public (non-underscore) alias so other views (e.g. FlyViewCustomLayer) can
+    // reach this Plan View's own PlanMasterController, mirroring FlyView's
+    // planController property. Named differently from the `planMasterController`
+    // id below to avoid a duplicate-property collision.
+    property var    masterController:                   planMasterController
+
     property var    _planMasterController:              planMasterController
     property var    _missionController:                 _planMasterController.missionController
     property var    _geoFenceController:                _planMasterController.geoFenceController
