@@ -147,6 +147,10 @@ Item {
     property bool missionPanelCollapsed: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
+    property string missionTaskStateDisplay: "IDLE"
+    property bool detectionTestEnabled: false
+    readonly property bool surveyDetectionActive: missionTaskDisplay === "SURVEY_FOR_ASSET"
+                                                   && (missionTaskStateDisplay === "RUNNING" || missionTaskStateDisplay === "ACTIVE")
     property string selectedTaskDisplay: "Selected: NO ACTION"
     property string missionStatusText: "Waiting for operator command"
     property var pendingAssetMatch: null
@@ -774,11 +778,11 @@ Item {
         }
         if (!root._bridgeClient) {
             root.bridgeSendStatus = "Bridge sender unavailable"
-            return
+            return false
         }
         if (!root._bridgeClient.sendJsonMessage(roundConfigMessage())) {
             root.bridgeSendStatus = "Send failed"
-            return
+            return false
         }
         root.resetBattleshipState()
         root.displaySelectedSurveyPlan()
@@ -1086,6 +1090,8 @@ Item {
         }
         missionModeDisplay = status.current_mission_mode || missionModeDisplay
         missionTaskDisplay = status.current_task || missionTaskDisplay
+        missionTaskStateDisplay = status.task_state || missionTaskStateDisplay
+        detectionTestEnabled = status.detection_test_enabled === true
         var completedDestination = status.last_completed_destination_id || ""
         if (status.last_completed_task === "GO_TO_WAYPOINT" && completedDestination.indexOf("battleship_") === 0
                 && !completedBattleshipDestinations[completedDestination]) {
@@ -1352,6 +1358,16 @@ Item {
         }
     }
 
+    function requestDetectionMode(enabled) {
+        if (enabled && surveyDetectionActive) {
+            missionStatusText = "DETECT unavailable while Survey is running"
+            return
+        }
+        if (sendMissionCommand("SET_DETECTION_MODE", { enabled: enabled })) {
+            missionStatusText = enabled ? "Detection test mode requested" : "Detection test mode off"
+        }
+    }
+
     function sendMissionCommand(commandName, extra) {
         // Surface the nudge direction (FORWARD/BACKWARD/LEFT/RIGHT) in the status
         // line instead of a bare "FINE_TUNE_NUDGE" that's indistinguishable per-arrow.
@@ -1379,6 +1395,7 @@ Item {
             return
         }
         updateLocalMissionStatus(commandName, payload.task_name || payload.approved)
+        return true
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -2829,6 +2846,46 @@ Row {
                         }
                     }
                 }
+            }
+        }
+
+        // Detection-only test mode. This runs the configured detector/classifier
+        // and normal asset popup path without starting or moving a Survey plan.
+        // Mission manager owns the state and rejects it while Survey is active.
+        Rectangle {
+            id: detectBtn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 12
+            height: 42
+            radius: 6
+            readonly property bool blockedBySurvey: root.surveyDetectionActive
+            color: root.detectionTestEnabled ? _clrGreen : (blockedBySurvey ? _clrCard : _clrBlue)
+            opacity: blockedBySurvey ? 0.45 : 1.0
+            border.color: _clrMuted
+            border.width: 1
+            Row {
+                anchors.centerIn: parent
+                spacing: 8
+                Text {
+                    text: root.detectionTestEnabled ? "●" : "○"
+                    color: "white"
+                    font.pixelSize: 13
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                    text: root.detectionTestEnabled ? "DETECT ON" : "DETECT"
+                    color: "white"
+                    font.pixelSize: 12
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            MouseArea {
+                anchors.fill: parent
+                enabled: !detectBtn.blockedBySurvey
+                onClicked: root.requestDetectionMode(!root.detectionTestEnabled)
             }
         }
     }
