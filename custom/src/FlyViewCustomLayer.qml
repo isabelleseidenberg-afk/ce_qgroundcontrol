@@ -1316,20 +1316,10 @@ Item {
             missionStatusText = "Awaiting operator input"
             return
         }
-        if (commandName === "SET_MODE") {
-            missionModeDisplay = selectedMissionMode
-            missionStatusText = "Mode command sent"
-            return
-        }
         if (commandName === "RUN_TASK") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = selectedTaskLabel || taskName
             missionStatusText = "Task load sent"
-            return
-        }
-        if (commandName === "PAUSE") {
-            missionModeDisplay = "PAUSED"
-            missionStatusText = "Pause sent"
             return
         }
         if (commandName === "RESUME") {
@@ -2545,53 +2535,6 @@ Item {
 
                 Text { text: "Mission Mode"; color: "white"; font.pixelSize: 13; font.bold: true }
 
-Row {
-                    spacing: 6
-                    Rectangle {
-                        width: 115; height: 28; radius: 4
-                        color: selectedMissionMode === "AUTO_SEQUENCE" ? _clrBlue : _clrCard
-                        Text { anchors.centerIn: parent; text: "Auto Sequence"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: {
-                                selectedMissionMode = "AUTO_SEQUENCE"
-                                root.sendMissionCommand("SET_MODE", { mode: selectedMissionMode })
-                            }
-                        }
-                    }
-                    Rectangle {
-                        width: 115; height: 28; radius: 4
-                        color: selectedMissionMode === "MANUAL_STEP" ? _clrBlue : _clrCard
-                        Text { anchors.centerIn: parent; text: "Manual Step"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: {
-                                selectedMissionMode = "MANUAL_STEP"
-                                root.sendMissionCommand("SET_MODE", { mode: selectedMissionMode })
-                            }
-                        }
-                    }
-                }
-
-                Row {
-                    spacing: 6
-                    Rectangle {
-                        width: 74; height: 28; radius: 4; color: _clrCard
-                        Text { anchors.centerIn: parent; text: "Pause"; color: "white"; font.pixelSize: 10 }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("PAUSE") }
-                    }
-                    Rectangle {
-                        width: 74; height: 28; radius: 4; color: _clrBlue
-                        Text { anchors.centerIn: parent; text: "Resume"; color: "white"; font.pixelSize: 10 }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("RESUME") }
-                    }
-                    Rectangle {
-                        width: 76; height: 28; radius: 4; color: _clrKill
-                        Text { anchors.centerIn: parent; text: "Abort"; color: "white"; font.pixelSize: 10; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("ABORT") }
-                    }
-                }
-
                 Rectangle {
                     width: 236; height: 74; color: _clrCard; radius: 4
                     Column {
@@ -3503,7 +3446,10 @@ Row {
                     { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
                     { n: "RETURN TO HOME",  d: "Fly to this round's configured home base (FOB) and land there." },
                     { n: "COMPLETE DEMO",   d: "End the run and clear the round so you can set up a new demo." },
-                    { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." }
+                    { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." },
+                    { n: "DEBUG",           d: "Far right. Opens a panel with extra recovery tools (Restore Home, Reset Kill) and GPS/status indicators. Not needed in normal operation." },
+                    { n: "RESTORE HOME",    d: "In the Debug panel. Re-sends and re-verifies the configured home point. Only while landed and disarmed; home is also restored automatically before every arm." },
+                    { n: "RESET KILL",      d: "In the Debug panel. Clears the kill-switch lockout after an emergency stop. Only while disarmed; asks for confirmation and will not re-arm on its own." }
                 ]
                 delegate: Row {
                     width:   infoCol.width
