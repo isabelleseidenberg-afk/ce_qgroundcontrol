@@ -174,7 +174,7 @@ Item {
         { label: "TAKEOFF", task: "TAKEOFF" },
         { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
         { label: "GAAP", task: "GAAP" },
-        { label: "HANDHELD CONTROLLER", task: "MANUAL" }
+        { label: "NO ACTION", task: "NO_ACTION" }
     ]
 
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
@@ -1243,15 +1243,6 @@ Item {
             root.sendMissionCommand("FINE_TUNE_MODE")
             return
         }
-        // "Handheld Controller" is not a mission_manager task -- it forces PX4 into
-        // Manual mode directly over MAVLink, same mechanism as the top-right MODE
-        // dropdown (_activeVehicle.flightMode), not RUN_TASK.
-        if (selectedTaskName === "MANUAL") {
-            root.fineTuningActive = false
-            if (_activeVehicle) _activeVehicle.flightMode = "Manual"
-            return
-        }
-
         root.fineTuningActive = false
         var payload = {
             task_name: selectedTaskName,
