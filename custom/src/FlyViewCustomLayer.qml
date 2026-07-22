@@ -1338,10 +1338,6 @@ Item {
             missionStatusText = "Kill reset requested — vehicle remains disarmed"
             return
         }
-        if (commandName === "RESTORE_HOME") {
-            missionStatusText = "Restore home requested"
-            return
-        }
         if (commandName === "RETURN_HOME") {
             missionTaskDisplay = "GO_TO_WAYPOINT"
             missionStatusText = "Returning to home base"
@@ -3049,6 +3045,29 @@ Item {
                 }
             }
 
+            // Take Control Back — recovers autonomy after the safety pilot has flown
+            // manually on the RC. A manual RC takeover latches the autonomy stack out
+            // (px4_control_node._rc_manual_override_latched → arbitrator /control/mode
+            // = MANUAL); returning the sticks to center does NOT clear it by design.
+            // This sends the explicit RESUME that releases the latch and puts the
+            // arbitrator back to AUTONOMY so Manual Step resumes. If the pilot is still
+            // holding the sticks, PX4's COM_RC_OVERRIDE re-latches immediately, so
+            // center the sticks first.
+            Rectangle {
+                width: c2CtrlLbl.width + 32; height: 38; color: _clrBlue; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "⟳"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: c2CtrlLbl; text: "C2 CONTROL"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        root.sendMissionCommand("RESUME")
+                    }
+                }
+            }
+
             // Land Mission — ROS sends PX4 NAV_LAND.
             Rectangle {
                 width: landMissionLbl.width + 28; height: 38; color: _clrOrange; radius: 6
@@ -3197,43 +3216,6 @@ Item {
                 color: _clrAmber
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap
-            }
-
-            // Restore Home — ROS asks px4_control_node to (re-)send and verify the
-            // configured fixed home while landed/disarmed. Manual retry only: home
-            // now restores and is gated before every arm automatically on its own.
-            Rectangle {
-                id: restoreHomeBtn
-                readonly property bool vehArmed: _activeVehicle ? _activeVehicle.armed : false
-                readonly property bool canRestore: demoLocked && homeGroundContact && !vehArmed
-                width: parent.width; height: 38; radius: 6
-                color: homeLockStatus === "HOME LOCKED" ? _clrGreen : (canRestore ? _clrBlue : _clrCard)
-                opacity: canRestore ? 1.0 : 0.55
-                border.color: _clrMuted; border.width: 1
-                HoverHandler { id: restoreHomeHover }
-                // Explicit ToolTip (not the attached ToolTip.visible/.text shorthand)
-                // parented straight to the window's Overlay with a z above debugPopup's
-                // (1300) - this button lives inside another Popup's contentItem, and the
-                // implicit attached tooltip was getting painted under debugPopup's own
-                // later Column siblings instead of on top of the whole popup.
-                ToolTip {
-                    parent:  Overlay.overlay
-                    visible: restoreHomeHover.hovered
-                    text:    homeLockStatus + (homeLockReason ? (": " + homeLockReason) : "")
-                    x:       restoreHomeBtn.mapToItem(Overlay.overlay, 0, 0).x
-                    y:       restoreHomeBtn.mapToItem(Overlay.overlay, 0, 0).y - height - 4
-                    z:       1500
-                }
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: "RESTORE HOME"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: restoreHomeBtn.canRestore
-                    onClicked: root.sendMissionCommand("RESTORE_HOME")
-                }
             }
 
             // Reset Kill — ground-safety lockout reset (rare recovery action).
@@ -3443,12 +3425,12 @@ Item {
                 model: [
                     { n: "ARM",             d: "Spin up the motors manually. Usually NOT needed — Start Mission arms by itself. Green = armed, blue = disarmed." },
                     { n: "HOLD POSITION",   d: "Stop and hover in place. The drone must already be flying." },
+                    { n: "C2 CONTROL",      d: "Regain autonomy after the safety pilot flew manually on the RC. Center the sticks first, then press this to return to AUTONOMY and resume Manual Step." },
                     { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
                     { n: "RETURN TO HOME",  d: "Fly to this round's configured home base (FOB) and land there." },
                     { n: "COMPLETE DEMO",   d: "End the run and clear the round so you can set up a new demo." },
                     { n: "KILL SWITCH",     d: "EMERGENCY ONLY: cuts the motors instantly — the drone will drop. Last resort." },
-                    { n: "DEBUG",           d: "Far right. Opens a panel with extra recovery tools (Restore Home, Reset Kill) and GPS/status indicators. Not needed in normal operation." },
-                    { n: "RESTORE HOME",    d: "In the Debug panel. Re-sends and re-verifies the configured home point. Only while landed and disarmed; home is also restored automatically before every arm." },
+                    { n: "DEBUG",           d: "Far right. Opens a panel with the Reset Kill recovery tool and GPS/status indicators. Not needed in normal operation." },
                     { n: "RESET KILL",      d: "In the Debug panel. Clears the kill-switch lockout after an emergency stop. Only while disarmed; asks for confirmation and will not re-arm on its own." }
                 ]
                 delegate: Row {
