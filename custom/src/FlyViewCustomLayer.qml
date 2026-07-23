@@ -140,12 +140,12 @@ Item {
     property string cameraMode: "survey"
     property string bridgeSendStatus: "Bridge: no sends yet"
     property int selectedMissionRoundIndex: 0
-    property string selectedMissionMode: "MANUAL_STEP"
     property int selectedManualTaskIndex: 0
     property string selectedTaskName: "NO_ACTION"
     property bool fineTuningActive: false
     property string selectedTaskLabel: "NO ACTION"
     property string selectedGripperAction: ""
+    property string selectedSurveyAction: ""
     property string selectedBattleshipDestinationId: ""
     property var completedBattleshipDestinations: ({})
     property bool missionPanelCollapsed: false
@@ -180,7 +180,9 @@ Item {
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
-        { label: "SURVEY", task: "SURVEY_FOR_ASSET" },
+        { label: "START SURVEY", task: "SURVEY_FOR_ASSET", survey_action: "RESTART" },
+        { label: "RESUME SURVEY", task: "SURVEY_FOR_ASSET", survey_action: "RESUME" },
+        { label: "STOP SURVEY", task: "STOP_SURVEY" },
         { label: "GAAP", task: "GAAP" },
         { label: "NO ACTION", task: "NO_ACTION" }
     ]
@@ -1239,16 +1241,28 @@ Item {
     }
 
 
-    function selectMissionTask(taskName, label, gripperAction) {
+    function selectMissionTask(taskName, label, gripperAction, surveyAction) {
         selectedTaskName = taskName
         selectedTaskLabel = label || taskName
         selectedTaskDisplay = "Selected: " + selectedTaskLabel
         selectedGripperAction = gripperAction || ""
+        selectedSurveyAction = taskName === "SURVEY_FOR_ASSET" ? (surveyAction || "RESUME") : ""
         if (taskName !== "GO_TO_WAYPOINT") selectedBattleshipDestinationId = ""
         missionStatusText = "Task selected"
     }
 
     function loadSelectedMissionTask() {
+        if (selectedTaskName === "STOP_SURVEY") {
+            root.sendMissionCommand("STOP_SURVEY")
+            return
+        }
+        if (selectedTaskName === "SURVEY_FOR_ASSET"
+                && (missionTaskStateDisplay === "RUNNING" || missionTaskStateDisplay === "ACTIVE")
+                && missionTaskDisplay !== "SURVEY_FOR_ASSET") {
+            missionStatusText = "Survey unavailable while " + missionTaskDisplay + " is running"
+            bridgeSendStatus = "Load blocked: another task is active"
+            return
+        }
         // "2ft Hover" / "Fine Tuning" are sent by their own command name, not
         // wrapped in RUN_TASK. HOVER_2FT IS a real mission_manager task (see
         // build_task_registry in mission_manager_node.py) -- mission_manager's
@@ -1277,6 +1291,7 @@ Item {
             payload.gripper_action = selectedGripperAction
         }
         if (selectedTaskName === "SURVEY_FOR_ASSET") {
+            payload.survey_action = selectedSurveyAction || "RESUME"
             payload.survey_plan_file = selectedSurveyPlanFile()
             root.displaySelectedSurveyPlan()
         }
@@ -1307,9 +1322,7 @@ Item {
     }
 
     function updateLocalMissionStatus(commandName, taskName) {
-        if (commandName === "START_AUTO") {
-            selectedMissionMode = "MANUAL_STEP"
-            selectedMissionMode = "MANUAL_STEP"
+        if (commandName === "INITIALIZE_MISSION") {
             missionModeDisplay = "MANUAL_STEP"
             missionTaskDisplay = "IDLE"
             selectedTaskDisplay = "Selected: " + selectedTaskLabel
@@ -1324,6 +1337,18 @@ Item {
         }
         if (commandName === "RESUME") {
             missionStatusText = "Resume sent"
+            return
+        }
+        if (commandName === "STOP_SURVEY") {
+            missionTaskDisplay = "IDLE"
+            missionTaskStateDisplay = "IDLE"
+            missionStatusText = "Survey stopped; resume point preserved"
+            return
+        }
+        if (commandName === "CANCEL_TASK") {
+            missionTaskDisplay = "IDLE"
+            missionTaskStateDisplay = "IDLE"
+            missionStatusText = "Task canceled; holding position"
             return
         }
         if (commandName === "ABORT") {
@@ -2510,7 +2535,7 @@ Item {
                     Rectangle {
                         width: 115; height: 34; color: _clrGreen; radius: 6
                         Text { anchors.centerIn: parent; text: "Start Mission"; color: "white"; font.pixelSize: 11; font.bold: true }
-                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("START_AUTO") }
+                        MouseArea { anchors.fill: parent; onClicked: root.sendMissionCommand("INITIALIZE_MISSION") }
                     }
                 }
 
@@ -2567,7 +2592,7 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 enabled: parent.roundAllowed
-                                onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "")
+                                onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "", modelData.survey_action || "")
                             }
                         }
                     }
@@ -2963,7 +2988,7 @@ Item {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Center: Arm | Hold | Land | Restore Home | RTL | Complete Demo | Reset Kill | Kill
+    // Center: Arm | Hold | Cancel Task | C2 Control | Land | RTL | Complete Demo | Reset Kill | Kill
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -3001,15 +3026,12 @@ Item {
             // PX4 arm/disarm via ROS (sendMissionCommand("ARM"/"DISARM") ->
             // px4_command_bridge -> COMPONENT_ARM_DISARM).
             //
-            // WHEN TO USE: normally you do NOT need this. px4_control auto-arms on
-            // entering AUTONOMY (DESIGN item F), so Start Mission -> Takeoff arms by
-            // itself, including a re-takeoff after a LAND. Press ARM only to manually
-            // spin up the motors WITHOUT starting a takeoff (e.g. a pre-arm check, or
-            // to re-arm after a LAND without re-running the round config). Arming alone
-            // does not fly the vehicle — you still need AUTONOMY + Takeoff to lift off.
+            // REQUIRED WORKFLOW: Start Mission only initializes the status to IDLE.
+            // Press ARM and wait for live green ARMED telemetry before selecting
+            // TAKEOFF and Load Task. Arming alone never moves the vehicle.
             //
             // Color + label reflect the LIVE vehicle arm state (_activeVehicle.armed):
-            // green "ARMED" when armed (incl. px4_control auto-arm on AUTONOMY),
+            // green "ARMED" only after PX4 confirms the explicit arm command,
             // blue "ARM" when disarmed (incl. PX4 auto-disarm after a LAND).
             Rectangle {
                 id: armBtn
@@ -3042,6 +3064,21 @@ Item {
                     onClicked: {
                         root.sendMissionCommand("HOLD_POSITION")
                     }
+                }
+            }
+
+            // Cancel Task — stops the active autonomy task and leaves PX4 holding
+            // position. Survey progress is preserved and may be resumed later.
+            Rectangle {
+                width: cancelTaskLbl.width + 28; height: 38; color: _clrOrange; radius: 6
+                Row {
+                    anchors.centerIn: parent; spacing: 6
+                    Text { text: "■"; color: "white"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: cancelTaskLbl; text: "CANCEL TASK"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: root.sendMissionCommand("CANCEL_TASK")
                 }
             }
 
@@ -3423,8 +3460,9 @@ Item {
 
             Repeater {
                 model: [
-                    { n: "ARM",             d: "Spin up the motors manually. Usually NOT needed — Start Mission arms by itself. Green = armed, blue = disarmed." },
-                    { n: "HOLD POSITION",   d: "Stop and hover in place. The drone must already be flying." },
+                    { n: "ARM",             d: "Required before TAKEOFF. Start Mission only sets IDLE; press ARM and wait for green ARMED telemetry." },
+                    { n: "HOLD POSITION",   d: "Pause motion and hover in place without canceling the task." },
+                    { n: "CANCEL TASK",      d: "Cancel the active autonomy task and hold position. Survey progress is preserved." },
                     { n: "C2 CONTROL",      d: "Regain autonomy after the safety pilot flew manually on the RC. Center the sticks first, then press this to return to AUTONOMY and resume Manual Step." },
                     { n: "LAND MISSION",    d: "Land straight down, right where the drone is now." },
                     { n: "RETURN TO HOME",  d: "Fly to this round's configured home base (FOB) and land there." },
