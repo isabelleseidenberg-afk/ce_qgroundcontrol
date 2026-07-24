@@ -19,7 +19,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtLocation
 import QtPositioning
-import QtTextToSpeech
 
 import QGroundControl
 import QGroundControl.Controls
@@ -169,13 +168,11 @@ Item {
     onTerritoryStatusChanged: {
         if (!_activeVehicle || !_activeVehicle.armed) return
         if (territoryStatus === "enemy") {
-            _tts.say("Entering enemy territory")
+            console.log("Entering enemy territory")
         } else if (territoryStatus === "home") {
-            _tts.say("Exiting enemy territory")
+            console.log("Exiting enemy territory")
         }
     }
-
-    TextToSpeech { id: _tts }
 
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
     readonly property var missionTaskOptions: [
