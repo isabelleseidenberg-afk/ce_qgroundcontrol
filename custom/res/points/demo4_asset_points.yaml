@@ -1,0 +1,60 @@
+# Demo #4 (Points Round) — asset point values.
+#
+# Flat YAML mapping of "<Color> <Shape>: <points>" (colorless special
+# shapes use just "<Shape>"). Edit the numbers to match the customer's
+# scoring; the operator loads this file in QGC (or points to their own copy).
+# The Points Round is about the CV finding the highest-value assets and
+# planning a route to collect the most points, so every possible asset is
+# listed here with its value (default 1).
+
+# Red
+Red Triangle: 0
+Red Circle: 0
+Red Square: 0
+Red Heart: 0
+Red Star: 0
+Red Hexagon: 0
+
+# Orange
+Orange Triangle: 0
+Orange Circle: 0
+Orange Square: 0
+Orange Heart: 0
+Orange Star: 0
+Orange Hexagon: 0
+
+# Yellow
+Yellow Triangle: 0
+Yellow Circle: 0
+Yellow Square: 0
+Yellow Heart: 0
+Yellow Star: 0
+Yellow Hexagon: 0
+
+# Green
+Green Triangle: 0
+Green Circle: 0
+Green Square: 0
+Green Heart: 0
+Green Star: 0
+Green Hexagon: 0
+
+# Blue
+Blue Triangle: 0
+Blue Circle: 0
+Blue Square: 0
+Blue Heart: 0
+Blue Star: 0
+Blue Hexagon: 0
+
+# Purple
+Purple Triangle: 0
+Purple Circle: 0
+Purple Square: 0
+Purple Heart: 0
+Purple Star: 0
+Purple Hexagon: 0
+
+# Special (colorless) assets
+Grenade: 0
+Jet Boat: 0
