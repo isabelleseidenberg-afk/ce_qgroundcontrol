@@ -141,9 +141,9 @@ Item {
     property string bridgeSendStatus: "Bridge: no sends yet"
     property int selectedMissionRoundIndex: 0
     property int selectedManualTaskIndex: 0
-    property string selectedTaskName: "NO_ACTION"
+    property string selectedTaskName: ""
     property bool fineTuningActive: false
-    property string selectedTaskLabel: "NO ACTION"
+    property string selectedTaskLabel: ""
     property string selectedGripperAction: ""
     property string selectedSurveyAction: ""
     property string selectedBattleshipDestinationId: ""
@@ -155,7 +155,7 @@ Item {
     property bool detectionTestEnabled: false
     readonly property bool surveyDetectionActive: missionTaskDisplay === "SURVEY_FOR_ASSET"
                                                    && (missionTaskStateDisplay === "RUNNING" || missionTaskStateDisplay === "ACTIVE")
-    property string selectedTaskDisplay: "Selected: NO ACTION"
+    property string selectedTaskDisplay: "Selected: NONE"
     property string missionStatusText: "Waiting for operator command"
     property var pendingAssetMatch: null
     property var latestMissionGoalWaypoint: null
@@ -178,13 +178,14 @@ Item {
     TextToSpeech { id: _tts }
 
     readonly property var missionRoundOptions: ["Round 1", "Round 2", "Round 3", "Round 4"]
-    readonly property var missionTaskOptions: [
+    readonly property var primaryMissionTaskOptions: [
         { label: "TAKEOFF", task: "TAKEOFF" },
+        { label: "GAAP", task: "GAAP" }
+    ]
+    readonly property var surveyMissionTaskOptions: [
         { label: "START SURVEY", task: "SURVEY_FOR_ASSET", survey_action: "RESTART" },
         { label: "RESUME SURVEY", task: "SURVEY_FOR_ASSET", survey_action: "RESUME" },
-        { label: "STOP SURVEY", task: "STOP_SURVEY" },
-        { label: "GAAP", task: "GAAP" },
-        { label: "NO ACTION", task: "NO_ACTION" }
+        { label: "STOP SURVEY", task: "STOP_SURVEY" }
     ]
 
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
@@ -1252,6 +1253,11 @@ Item {
     }
 
     function loadSelectedMissionTask() {
+        if (selectedTaskName === "") {
+            missionStatusText = "Select a task before loading"
+            bridgeSendStatus = "Load blocked: no task selected"
+            return
+        }
         if (selectedTaskName === "STOP_SURVEY") {
             root.sendMissionCommand("STOP_SURVEY")
             return
@@ -2569,30 +2575,55 @@ Item {
 
 
 
-                Grid {
-                    columns: 2
+                Row {
                     spacing: 6
-                    Repeater {
-                        model: root.missionTaskOptions
-                        delegate: Rectangle {
-                            property bool roundAllowed: !modelData.round_id || root.selectedMissionRoundId() === modelData.round_id
-                            width: 115; height: 28; radius: 4
-                            color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
-                            opacity: roundAllowed ? 1.0 : 0.35
-                            Text {
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                color: "white"
-                                font.pixelSize: 9
-                                font.bold: root.selectedTaskLabel === modelData.label
-                                elide: Text.ElideRight
-                                width: parent.width - 8
-                                horizontalAlignment: Text.AlignHCenter
+
+                    Column {
+                        width: 115
+                        spacing: 6
+                        Repeater {
+                            model: root.primaryMissionTaskOptions
+                            delegate: Rectangle {
+                                width: 115; height: 28; radius: 4
+                                color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: "white"
+                                    font.pixelSize: 9
+                                    font.bold: root.selectedTaskLabel === modelData.label
+                                    width: parent.width - 8
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: root.selectMissionTask(modelData.task, modelData.label, "", "")
+                                }
                             }
-                            MouseArea {
-                                anchors.fill: parent
-                                enabled: parent.roundAllowed
-                                onClicked: root.selectMissionTask(modelData.task, modelData.label, modelData.gripper_action || "", modelData.survey_action || "")
+                        }
+                    }
+
+                    Column {
+                        width: 115
+                        spacing: 6
+                        Repeater {
+                            model: root.surveyMissionTaskOptions
+                            delegate: Rectangle {
+                                width: 115; height: 28; radius: 4
+                                color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: "white"
+                                    font.pixelSize: 9
+                                    font.bold: root.selectedTaskLabel === modelData.label
+                                    width: parent.width - 8
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: root.selectMissionTask(modelData.task, modelData.label, "", modelData.survey_action || "")
+                                }
                             }
                         }
                     }
@@ -2682,6 +2713,23 @@ Item {
                     width: 236; height: 32; radius: 4; color: _clrPurple
                     Text { anchors.centerIn: parent; text: "Load Task"; color: "white"; font.pixelSize: 12; font.bold: true }
                     MouseArea { anchors.fill: parent; onClicked: root.loadSelectedMissionTask() }
+                }
+
+                // Cancel the active autonomy task and hold position. Survey
+                // progress remains available for Resume Survey.
+                Rectangle {
+                    width: 236; height: 32; radius: 4; color: _clrOrange
+                    Text {
+                        anchors.centerIn: parent
+                        text: "CANCEL TASK"
+                        color: "white"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.sendMissionCommand("CANCEL_TASK")
+                    }
                 }
             }
         }
@@ -2988,7 +3036,7 @@ Item {
 
     // =========================================================================
     // COMMAND STRIP  (bottom bar)
-    // Center: Arm | Hold | Cancel Task | C2 Control | Land | RTL | Complete Demo | Reset Kill | Kill
+    // Center: Arm | Hold | C2 Control | Land | RTL | Complete Demo | Reset Kill | Kill
     // =========================================================================
     Rectangle {
         id:             bottomBar
@@ -3064,21 +3112,6 @@ Item {
                     onClicked: {
                         root.sendMissionCommand("HOLD_POSITION")
                     }
-                }
-            }
-
-            // Cancel Task — stops the active autonomy task and leaves PX4 holding
-            // position. Survey progress is preserved and may be resumed later.
-            Rectangle {
-                width: cancelTaskLbl.width + 28; height: 38; color: _clrOrange; radius: 6
-                Row {
-                    anchors.centerIn: parent; spacing: 6
-                    Text { text: "■"; color: "white"; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: cancelTaskLbl; text: "CANCEL TASK"; color: "white"; font.pixelSize: 12; font.bold: true; anchors.verticalCenter: parent.verticalCenter }
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: root.sendMissionCommand("CANCEL_TASK")
                 }
             }
 
