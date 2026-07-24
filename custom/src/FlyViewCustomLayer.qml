@@ -207,23 +207,23 @@ Item {
         {
             label: "Outfield",
             territory: "outfield",
-            ceFobCoordinates: [38.750675, -77.497024, 0],
-            wvxFobCoordinates: [38.750839, -77.497208, 0],
+            ceFobCoordinates: [38.75068797, -77.49702673, 0],
+            wvxFobCoordinates: [38.75084425, -77.49722179, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
         },
         {
             label: "Home Base",
             territory: "bases",
-            ceFobCoordinates: [38.750839, -77.497208, 0],
-            wvxFobCoordinates: [38.750675, -77.497024, 0],
+            ceFobCoordinates: [38.75084425, -77.49722179, 0],
+            wvxFobCoordinates: [38.75068797, -77.49702673, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
         }
     ]
     readonly property var _arenaPath: [
-        QtPositioning.coordinate(38.75077, -77.49736),
-        QtPositioning.coordinate(38.75094645, -77.4970914),
-        QtPositioning.coordinate(38.75073705, -77.49686506),
-        QtPositioning.coordinate(38.7505606, -77.49713366)
+        QtPositioning.coordinate(38.750769, -77.497369),
+        QtPositioning.coordinate(38.75095647, -77.49711257),
+        QtPositioning.coordinate(38.75075656, -77.49687211),
+        QtPositioning.coordinate(38.75056909, -77.49712854)
     ]
     
 
@@ -1496,8 +1496,8 @@ Item {
             line.color: "white"
             line.width: 2
             path: [
-                QtPositioning.coordinate(38.750665, -77.497247),
-                QtPositioning.coordinate(38.750842, -77.496978)
+                QtPositioning.coordinate(38.75066874, -77.49724892),
+                QtPositioning.coordinate(38.75085677, -77.49699212)
             ]
         }
     }
