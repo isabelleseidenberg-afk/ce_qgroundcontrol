@@ -41,12 +41,6 @@ Item {
     readonly property var   _defaultVehicleCoordinate:  QtPositioning.coordinate(37.803784, -122.462276)
     readonly property bool  _waypointsOnlyMode:         QGroundControl.corePlugin.options.missionWaypointsOnly
 
-    // Public (non-underscore) alias so other views (e.g. FlyViewCustomLayer) can
-    // reach this Plan View's own PlanMasterController, mirroring FlyView's
-    // planController property. Named differently from the `planMasterController`
-    // id below to avoid a duplicate-property collision.
-    property var    masterController:                   planMasterController
-
     property var    _planMasterController:              planMasterController
     property var    _missionController:                 _planMasterController.missionController
     property var    _geoFenceController:                _planMasterController.geoFenceController
@@ -171,7 +165,26 @@ Item {
         Component.onCompleted: {
             _planMasterController.start()
             _missionController.setCurrentPlanViewSeqNum(0, true)
+            // CrownEagle: Plan View has its own PlanMasterController instance, entirely
+            // separate from Fly View's (see FlyViewCustomLayer.qml's deployFullFieldGeofence
+            // / _planMasterController: globals.planMasterControllerFlyView) -- loading a plan
+            // there never touches this one. Load the full-field geofence directly here as an
+            // immediate first-paint fallback (Fly View may not have loaded anything yet by
+            // the time this runs), then mirror whatever Fly View actually has loaded via
+            // currentPlanFileChanged below -- this naturally picks up both Fly View's own
+            // full-field deploy once it's ready, and later Send Config's round survey plan.
+            _planMasterController.loadFromFile(":/Custom/qml/geofences/ce_geofence_full_field.plan")
+            mirrorFlyViewPlan()
         }
+
+        // CrownEagle: PlanMasterController::_activeVehicleChanged() (C++) calls
+        // _showPlanFromManagerVehicle() any time the connected vehicle changes,
+        // asynchronously replacing whatever's staged here with whatever mission/geofence
+        // the vehicle itself reports (nothing, since only Fly View's controller ever
+        // uploads). That silently wipes whatever was mirrored above. Re-assert it after a
+        // short settle delay so Plan View always ends up showing the same plan Fly View
+        // currently has, matching Fly View's own persistent auto-deploy behavior.
+        onManagerVehicleChanged: flyViewPlanReassertTimer.restart()
 
         onPromptForPlanUsageOnVehicleChange: {
             if (!_promptForPlanUsageShowing) {
@@ -254,6 +267,36 @@ Item {
             fileDialog.nameFilters =    ShapeFileHelper.fileDialogKMLFilters
             fileDialog.openForSave()
         }
+    }
+
+    // CrownEagle: see onManagerVehicleChanged above. A fixed settle delay rather than a
+    // load-complete signal because GeoFenceController exposes no QML-facing "sync finished"
+    // notification to hook -- this fires once per vehicle change, not on a repeating poll,
+    // so it doesn't fight an operator actively editing the plan.
+    Timer {
+        id:  flyViewPlanReassertTimer
+        interval: 2000
+        repeat: false
+        onTriggered: mirrorFlyViewPlan()
+    }
+
+    // CrownEagle: mirrors Fly View's PlanMasterController (globals.planMasterControllerFlyView,
+    // reachable here the same way FlyViewCustomLayer.qml reaches it -- both FlyView and
+    // PlanView are direct children of MainWindow.qml, so its `globals` id is visible from
+    // both) into this view's own separate controller. currentPlanFile is whatever Fly View
+    // most recently loaded via loadFromFile(): the full-field geofence on launch, then
+    // whatever round survey/mission plan "Send Config" loads via displaySelectedSurveyPlan().
+    function mirrorFlyViewPlan() {
+        var flyViewController = globals.planMasterControllerFlyView
+        var path = flyViewController ? flyViewController.currentPlanFile : ""
+        if (path) {
+            _planMasterController.loadFromFile(path)
+        }
+    }
+
+    Connections {
+        target: globals.planMasterControllerFlyView
+        function onCurrentPlanFileChanged() { mirrorFlyViewPlan() }
     }
 
     Connections {

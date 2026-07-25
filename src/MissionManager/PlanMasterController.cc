@@ -511,6 +511,14 @@ void PlanMasterController::removeAll(void)
     }
 }
 
+void PlanMasterController::removeMissionOnly(void)
+{
+    _missionController.removeAll();
+    if (_offline) {
+        _missionController.setDirty(false);
+    }
+}
+
 void PlanMasterController::removeAllFromVehicle(void)
 {
     if (!offline()) {

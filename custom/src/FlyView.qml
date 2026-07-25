@@ -108,6 +108,9 @@ Item {
             pipView:    _pipView
         }
 
+        // Display the locally selected survey plan after Send Config.
+        // FlyViewMap also owns per-vehicle mission visuals; this layer is specifically
+        // tied to the Fly View PlanMasterController used by displaySelectedSurveyPlan().
         PlanMapItems {
             map:                    mapControl
             largeMapView:           _mainWindowIsMap

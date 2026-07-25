@@ -3,14 +3,17 @@
         <file alias="QGroundControl/FlightDisplay/FlyViewCustomLayer.qml">src/FlyViewCustomLayer.qml</file>
         <file alias="QGroundControl/FlightDisplay/FlyView.qml">src/FlyView.qml</file>
         <file alias="QGroundControl/FlightDisplay/FlyViewWidgetLayer.qml">src/FlyViewWidgetLayer.qml</file>
+        <file alias="QGroundControl/Controls/PlanView.qml">src/PlanView.qml</file>
         <file alias="geofences/ce_geofence_home_base.plan">res/geofences/ce_geofence_home_base.plan</file>
         <file alias="geofences/ce_geofence_outfield.plan">res/geofences/ce_geofence_outfield.plan</file>
+        <file alias="geofences/ce_geofence_full_field.plan">res/geofences/ce_geofence_full_field.plan</file>
         <file alias="plans/home_survey_from_outfield.plan">res/plans/home_survey_from_outfield.plan</file>
         <file alias="plans/home_survey_from_bases.plan">res/plans/home_survey_from_bases.plan</file>
-        <file alias="plans/full_field_from_outfield_enemy.plan">res/plans/full_field_from_outfield_enemy.plan</file>
-        <file alias="plans/full_field_from_bases_enemy.plan">res/plans/full_field_from_bases_enemy.plan</file>
+        <file alias="plans/full_field_from_outfield_home.plan">res/plans/full_field_from_outfield_home.plan</file>
+        <file alias="plans/full_field_from_bases_home.plan">res/plans/full_field_from_bases_home.plan</file>
         <file alias="plans/enemy_survey_from_outfield.plan">res/plans/enemy_survey_from_outfield.plan</file>
         <file alias="plans/enemy_survey_from_bases.plan">res/plans/enemy_survey_from_bases.plan</file>
-        <file alias="points/demo4_asset_points.yaml">res/points/demo4_asset_points.yaml</file>
+        <file alias="points/demo4_asset_points.yaml">../../ce_lcp/C2_delivery/demo4_asset_points.yaml</file>
+        <file alias="config/set_plan_coordinates.yaml">../../ce_lcp/qgc-interface/scripts/set_plan_coordinates.yaml</file>
     </qresource>
 </RCC>

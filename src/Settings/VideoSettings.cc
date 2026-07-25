@@ -187,11 +187,10 @@ DECLARE_SETTINGSFACT_NO_FUNC(VideoSettings, tcpUrl)
 
 bool VideoSettings::streamConfigured(void)
 {
-    //-- First, check if it's autoconfigured
-    if(VideoManager::instance()->autoStreamConfigured()) {
-        qCDebug(VideoManagerLog) << "Stream auto configured";
-        return true;
-    }
+    //-- Deliberately does not defer to VideoManager::autoStreamConfigured() here:
+    //   that reflects whatever the vehicle's camera last advertised over MAVLink
+    //   (this fork's vehicle always advertises its own RTSP stream), which would
+    //   silently take priority over the operator's actual videoSource choice below.
     //-- Check if it's disabled
     QString vSource = videoSource()->rawValue().toString();
     if(vSource == videoSourceNoVideo || vSource == videoDisabled) {

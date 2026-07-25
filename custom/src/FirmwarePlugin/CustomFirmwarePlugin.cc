@@ -6,8 +6,9 @@
 CustomFirmwarePlugin::CustomFirmwarePlugin()
 {
     for (auto &mode: _flightModeList) {
+        const bool isManual = static_cast<PX4CustomMode::Mode>(mode.custom_mode) == PX4CustomMode::MANUAL;
         //-- Narrow the flight mode options to only these
-        if ((mode.mode_name != pauseFlightMode()) && (mode.mode_name != rtlFlightMode()) && (mode.mode_name != missionFlightMode())) {
+        if (!isManual && (mode.mode_name != pauseFlightMode()) && (mode.mode_name != rtlFlightMode()) && (mode.mode_name != missionFlightMode())) {
             // No other flight modes can be set
             mode.canBeSet = false;
         }
@@ -107,6 +108,7 @@ void CustomFirmwarePlugin::updateAvailableFlightModes(FlightModeList &modeList)
         case PX4CustomMode::AUTO_LOITER:
         case PX4CustomMode::AUTO_RTL:
         case PX4CustomMode::AUTO_MISSION:
+        case PX4CustomMode::MANUAL:
             mode.canBeSet = true;
             break;
         case PX4CustomMode::OFFBOARD:
@@ -114,7 +116,6 @@ void CustomFirmwarePlugin::updateAvailableFlightModes(FlightModeList &modeList)
         case PX4CustomMode::POSCTL_ORBIT:
         case PX4CustomMode::AUTO_FOLLOW_TARGET:
         case PX4CustomMode::AUTO_PRECLAND:
-        case PX4CustomMode::MANUAL:
         case PX4CustomMode::STABILIZED:
         case PX4CustomMode::ACRO:
         case PX4CustomMode::RATTITUDE:
