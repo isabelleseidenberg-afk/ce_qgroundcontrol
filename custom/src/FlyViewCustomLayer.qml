@@ -141,6 +141,7 @@ Item {
     property string selectedBattleshipDestinationId: ""
     property var completedBattleshipDestinations: ({})
     property bool missionPanelCollapsed: false
+    property bool missionNodesEnabled: false
     property string missionModeDisplay: "MANUAL_STEP"
     property string missionTaskDisplay: "IDLE"
     property string missionTaskStateDisplay: "IDLE"
@@ -2631,6 +2632,7 @@ Item {
                             model: root.primaryMissionTaskOptions
                             delegate: Rectangle {
                                 width: 115; height: 28; radius: 4
+                                opacity: root.missionNodesEnabled ? 1.0 : 0.4
                                 color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
                                 Text {
                                     anchors.centerIn: parent
@@ -2643,6 +2645,7 @@ Item {
                                 }
                                 MouseArea {
                                     anchors.fill: parent
+                                    enabled: root.missionNodesEnabled
                                     onClicked: root.selectMissionTask(modelData.task, modelData.label, "", "")
                                 }
                             }
@@ -2656,6 +2659,7 @@ Item {
                             model: root.surveyMissionTaskOptions
                             delegate: Rectangle {
                                 width: 115; height: 28; radius: 4
+                                opacity: root.missionNodesEnabled ? 1.0 : 0.4
                                 color: root.selectedTaskName === modelData.task && root.selectedTaskLabel === modelData.label ? _clrBlue : _clrCard
                                 Text {
                                     anchors.centerIn: parent
@@ -2668,6 +2672,7 @@ Item {
                                 }
                                 MouseArea {
                                     anchors.fill: parent
+                                    enabled: root.missionNodesEnabled
                                     onClicked: root.selectMissionTask(modelData.task, modelData.label, "", modelData.survey_action || "")
                                 }
                             }
@@ -2719,6 +2724,7 @@ Item {
                     spacing: 6
                     Rectangle {
                         width: 115; height: 28; radius: 4
+                        opacity: root.missionNodesEnabled ? 1.0 : 0.4
                         color: root.selectedTaskName === "HOVER_2FT" ? _clrBlue : _clrCard
                         Text {
                             anchors.centerIn: parent
@@ -2732,11 +2738,13 @@ Item {
                         }
                         MouseArea {
                             anchors.fill: parent
+                            enabled: root.missionNodesEnabled
                             onClicked: root.selectMissionTask("HOVER_2FT", "2FT HOVER", "")
                         }
                     }
                     Rectangle {
                         width: 115; height: 28; radius: 4
+                        opacity: root.missionNodesEnabled ? 1.0 : 0.4
                         color: root.selectedTaskName === "FINE_TUNE_MODE" ? _clrBlue : _clrCard
                         Text {
                             anchors.centerIn: parent
@@ -2750,6 +2758,7 @@ Item {
                         }
                         MouseArea {
                             anchors.fill: parent
+                            enabled: root.missionNodesEnabled
                             onClicked: root.selectMissionTask("FINE_TUNE_MODE", "FINE TUNING", "")
                         }
                     }
@@ -3219,6 +3228,7 @@ Item {
             // arm/launch point. (demo reset is the COMPLETE DEMO button)
             Rectangle {
                 width: rthLbl.width + 32; height: 38; color: _clrGreen; radius: 6
+                opacity: root.missionNodesEnabled ? 1.0 : 0.4
                 Row {
                     anchors.centerIn: parent; spacing: 6
                     Text { text: "⌂"; color: "white"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
@@ -3226,6 +3236,7 @@ Item {
                 }
                 MouseArea {
                     anchors.fill: parent
+                    enabled: root.missionNodesEnabled
                     onClicked: {
                         root.sendMissionCommand("RETURN_HOME")
                     }
@@ -3365,6 +3376,29 @@ Item {
                         debugPopup.visible = false
                         resetKillConfirmPopup.open()
                     }
+                }
+            }
+
+            // Toggle Mission Control Nodes — grey out/re-enable every Mission
+            // Mode task button (TAKEOFF/GAAP/survey controls) at once, for
+            // ground testing when those controls should be locked out.
+            Rectangle {
+                id: toggleMissionNodesBtn
+                width: parent.width; height: 44; radius: 6
+                color: root.missionNodesEnabled ? _clrCard : _clrOrange
+                Text {
+                    anchors.centerIn: parent
+                    width: parent.width - 16
+                    text: (root.missionNodesEnabled ? "⏸ " : "▶ ") + "TOGGLE MISSION CONTROL NODES"
+                    color: "white"
+                    font.pixelSize: 11
+                    font.bold: true
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: root.missionNodesEnabled = !root.missionNodesEnabled
                 }
             }
         }
