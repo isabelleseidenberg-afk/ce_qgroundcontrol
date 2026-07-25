@@ -128,14 +128,6 @@ Item {
     property string pendingColor: "Red"
     property string pendingShape: "Triangle"
 
-    // ─────────────────────────────────────────────────────────────────────
-    // VEHICLE CONTROL STATE
-    // isArmed: toggled by ARM/DISARM button; arming is only permitted in Demo #4
-    // ─────────────────────────────────────────────────────────────────────
-    property bool isArmed: false
-
-    readonly property bool _canArm: demoLocked
-
     property int selectedRoundSpecIndex: 0
     property string cameraMode: "survey"
     property string bridgeSendStatus: "Bridge: no sends yet"
@@ -191,6 +183,7 @@ Item {
     readonly property string battleshipCoordinatesConfigPath: ":/Custom/qml/config/set_plan_coordinates.yaml"
     property var battleshipOrigins: ({ bases: [], outfield: [] })
     property var battleshipShipCorners: ({ bases: [], outfield: [] })
+    property var battleshipFobCorners: ({ bases: [null, null, null, null], outfield: [null, null, null, null] })
     property var battleshipTerritoryShipSets: ({})
     property var configuredHomeOrigins: ({ bases: null, outfield: null })
     property bool battleshipCoordinatesLoaded: false
@@ -202,28 +195,29 @@ Item {
     property var _arenaOverlay
     property var _divisionLineOverlay
     property var _fobMarkers: []
+    property var _fobBoxOverlays: []
     property var _shipBoxOverlays: []
     readonly property var roundSpecOptions: [
         {
             label: "Outfield",
             territory: "outfield",
-            ceFobCoordinates: [38.75068797, -77.49702673, 0],
-            wvxFobCoordinates: [38.75084425, -77.49722179, 0],
+            ceFobCoordinates: [38.750675, -77.497024, 0],
+            wvxFobCoordinates: [38.750839, -77.497208, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_outfield.plan"
         },
         {
             label: "Home Base",
             territory: "bases",
-            ceFobCoordinates: [38.75084425, -77.49722179, 0],
-            wvxFobCoordinates: [38.75068797, -77.49702673, 0],
+            ceFobCoordinates: [38.750839, -77.497208, 0],
+            wvxFobCoordinates: [38.750675, -77.497024, 0],
             geofenceFilePath: ":/Custom/qml/geofences/ce_geofence_home_base.plan"
         }
     ]
     readonly property var _arenaPath: [
-        QtPositioning.coordinate(38.750769, -77.497369),
-        QtPositioning.coordinate(38.75095647, -77.49711257),
-        QtPositioning.coordinate(38.75075656, -77.49687211),
-        QtPositioning.coordinate(38.75056909, -77.49712854)
+        QtPositioning.coordinate(38.750769, -77.497374),
+        QtPositioning.coordinate(38.750962, -77.497105),
+        QtPositioning.coordinate(38.750734, -77.496891),
+        QtPositioning.coordinate(38.75056, -77.497165)
     ]
     
 
@@ -418,7 +412,6 @@ Item {
         demoLocked        = false
         selectedDemoIndex = -1
         selectedMissionRoundIndex = 0
-        isArmed           = false
         demo1Color        = "Red"
         demo2Shape        = "Triangle"
         pendingColor      = "Red"
@@ -470,6 +463,12 @@ Item {
         var corners = {
             bases: [[null, null, null, null], [null, null, null, null], [null, null, null, null]],
             outfield: [[null, null, null, null], [null, null, null, null], [null, null, null, null]]
+        }
+        // 4 corners per FOB (bases_fob/outfield_fob), same shape as a single ship's
+        // corners - used to draw the FOB box overlay (see fobBoxPaths).
+        var fobCorners = {
+            bases: [null, null, null, null],
+            outfield: [null, null, null, null]
         }
         var routing = {}
         var currentShipSet = ""
@@ -538,6 +537,14 @@ Item {
                 continue
             }
 
+            if (currentFobTerritory !== "") {
+                var fobCorner = trimmed.match(/^corner_([1-4]):\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
+                if (fobCorner) {
+                    fobCorners[currentFobTerritory][Number(fobCorner[1]) - 1] = [Number(fobCorner[2]), Number(fobCorner[3])]
+                }
+                continue
+            }
+
             if (currentShipSet === "") continue
             var corner = trimmed.match(/^corner_([1-4]):\s*\[\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*\]$/)
             if (corner) {
@@ -555,6 +562,11 @@ Item {
             if (!homeOrigins[setName]) {
                 throw new Error("missing " + setName + "_fob.origin for fixed PX4 home")
             }
+            for (var fc = 0; fc < 4; fc++) {
+                if (!fobCorners[setName][fc]) {
+                    throw new Error("missing " + setName + "_fob.corner_" + (fc + 1))
+                }
+            }
             for (var ship = 0; ship < 3; ship++) {
                 if (!origins[setName][ship]) {
                     throw new Error("missing " + setName + "_ship_" + (ship + 1) + ".origin")
@@ -566,7 +578,7 @@ Item {
                 }
             }
         }
-        return { origins: origins, routing: routing, corners: corners, homeOrigins: homeOrigins }
+        return { origins: origins, routing: routing, corners: corners, homeOrigins: homeOrigins, fobCorners: fobCorners }
     }
 
     function loadBattleshipCoordinates() {
@@ -579,6 +591,7 @@ Item {
             var parsed = parseBattleshipCoordinatesYaml(xhr.responseText || "")
             battleshipOrigins = parsed.origins
             battleshipShipCorners = parsed.corners
+            battleshipFobCorners = parsed.fobCorners
             battleshipTerritoryShipSets = parsed.routing
             configuredHomeOrigins = parsed.homeOrigins
             battleshipCoordinatesLoaded = true
@@ -622,6 +635,25 @@ Item {
         var paths = []
         for (var i = 0; i < shipsCorners.length; i++) {
             var corners = shipsCorners[i]
+            if (!corners || corners.length !== 4) continue
+            var path = []
+            for (var c = 0; c < 4; c++) {
+                if (!corners[c]) { path = null; break }
+                path.push(QtPositioning.coordinate(corners[c][0], corners[c][1]))
+            }
+            if (path) paths.push(path)
+        }
+        return paths
+    }
+
+    // Both FOB boxes, every round (unlike battleshipShipBoxPaths, which is round-3
+    // only) - one coordinate-corner-path per territory's bases_fob/outfield_fob,
+    // for a box overlay drawn alongside the existing C&E/WvX pill markers.
+    function fobBoxPaths() {
+        if (!battleshipCoordinatesLoaded) return []
+        var paths = []
+        for (var setName of ["bases", "outfield"]) {
+            var corners = battleshipFobCorners[setName]
             if (!corners || corners.length !== 4) continue
             var path = []
             for (var c = 0; c < 4; c++) {
@@ -891,6 +923,10 @@ Item {
             _clearMapObject(_fobMarkers[i])
         }
         _fobMarkers = []
+        for (var k = 0; k < _fobBoxOverlays.length; k++) {
+            _clearMapObject(_fobBoxOverlays[k])
+        }
+        _fobBoxOverlays = []
         clearShipBoxOverlays()
     }
 
@@ -1044,6 +1080,17 @@ Item {
         })
         mapControl.addMapItem(wvxMarker)
         _fobMarkers.push(wvxMarker)
+
+        // Every round: box around both FOBs (reuses the same arenaOverlayComponent
+        // style as the round-3 ship boxes), from bases_fob/outfield_fob corner_1..4.
+        var fobPaths = fobBoxPaths()
+        for (var f = 0; f < fobPaths.length; f++) {
+            var fobBox = arenaOverlayComponent.createObject(mapControl, {
+                path: fobPaths[f]
+            })
+            mapControl.addMapItem(fobBox)
+            _fobBoxOverlays.push(fobBox)
+        }
 
         // Round 3 only: green box per opposing-territory ship (reuses the same
         // arenaOverlayComponent style as the geofence, just one instance per ship).
@@ -1375,7 +1422,6 @@ Item {
             return
         }
         if (commandName === "DISARM") {
-            isArmed = false
             missionStatusText = "Disarm sent"
             return
         }
@@ -1496,8 +1542,8 @@ Item {
             line.color: "white"
             line.width: 2
             path: [
-                QtPositioning.coordinate(38.75066874, -77.49724892),
-                QtPositioning.coordinate(38.75085677, -77.49699212)
+                QtPositioning.coordinate(38.750665, -77.49727),
+                QtPositioning.coordinate(38.750848, -77.496998)
             ]
         }
     }
@@ -2712,7 +2758,19 @@ Item {
                 Rectangle {
                     width: 236; height: 32; radius: 4; color: _clrPurple
                     Text { anchors.centerIn: parent; text: "Load Task"; color: "white"; font.pixelSize: 12; font.bold: true }
-                    MouseArea { anchors.fill: parent; onClicked: root.loadSelectedMissionTask() }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            // TAKEOFF starts real flight -- require an explicit confirm
+                            // (same pattern as Reset Kill's resetKillConfirmPopup) instead
+                            // of sending it on a single click like every other task.
+                            if (root.selectedTaskName === "TAKEOFF") {
+                                takeoffConfirmPopup.open()
+                            } else {
+                                root.loadSelectedMissionTask()
+                            }
+                        }
+                    }
                 }
 
                 // Cancel the active autonomy task and hold position. Survey
@@ -3363,6 +3421,64 @@ Item {
                         onClicked: {
                             resetKillConfirmPopup.close()
                             root.sendMissionCommand("RESET_KILL")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: takeoffConfirmPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        width: 400
+        height: 190
+        padding: 18
+        x: Math.max(12, (root.width - width) / 2)
+        y: Math.max(12, (root.height - height) / 2)
+        z: 1400
+        background: Rectangle {
+            color: _clrPanel
+            border.color: _clrGreen
+            border.width: 2
+            radius: 8
+        }
+        contentItem: Column {
+            spacing: 14
+            Text {
+                width: parent.width
+                text: "CONFIRM TAKEOFF?"
+                color: "white"
+                font.pixelSize: 16
+                font.bold: true
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Text {
+                width: parent.width
+                text: "The vehicle will climb to the round's safe altitude over its current position. Confirm the area is clear before proceeding."
+                color: _clrMuted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 16
+                Rectangle {
+                    width: 120; height: 36; radius: 6; color: _clrCard; border.color: _clrMuted
+                    Text { anchors.centerIn: parent; text: "CANCEL"; color: "white"; font.bold: true }
+                    MouseArea { anchors.fill: parent; onClicked: takeoffConfirmPopup.close() }
+                }
+                Rectangle {
+                    width: 150; height: 36; radius: 6; color: _clrGreen
+                    Text { anchors.centerIn: parent; text: "CONFIRM TAKEOFF"; color: "white"; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            takeoffConfirmPopup.close()
+                            root.loadSelectedMissionTask()
                         }
                     }
                 }
