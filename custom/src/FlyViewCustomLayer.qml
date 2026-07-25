@@ -85,6 +85,7 @@ Item {
     readonly property string _telSpeed:    _activeVehicle ? _activeVehicle.vehicle.groundSpeed.value.toFixed(1) : "—"
     readonly property string _telHeading:  _activeVehicle ? _activeVehicle.vehicle.heading.value.toFixed(0)     : "—"
     readonly property string _telAltitude: _activeVehicle ? _activeVehicle.vehicle.altitudeRelative.value.toFixed(1) : "—"
+    readonly property string _telAltitudeAmsl: _activeVehicle ? _activeVehicle.vehicle.altitudeAMSL.value.toFixed(1) : "—"
     readonly property string _telLat:      _activeVehicle ? _activeVehicle.coordinate.latitude.toFixed(6)      : "—"
     readonly property string _telLon:      _activeVehicle ? _activeVehicle.coordinate.longitude.toFixed(6)     : "—"
 
@@ -161,6 +162,65 @@ Item {
     property var latestMissionGoalWaypoint: null
     property var previousMissionGoalWaypoint: null
     property var _confirmedAssetMarkers: []
+
+    // Fixed-altitude state shared by native QGC staging and the telemetry card.
+    // Samples are collected only while disarmed. Once armed, the accepted AMSL
+    // launch value remains immutable for that sortie.
+    property var nativeAmslSamples: []
+    property real nativePlanLaunchAmsl: NaN
+    property bool nativePlanAmslStable: false
+    property string nativePlanAltitudeStatus: "Waiting for stable launch AMSL"
+    property var altitudeReferenceStatus: ({})
+
+    function altitudeText(value) {
+        var number = Number(value)
+        return isNaN(number) ? "—" : number.toFixed(2) + " m"
+    }
+
+    function sampleNativeLaunchAmsl() {
+        if (!_activeVehicle || _activeVehicle.armed) return
+        var value = Number(_activeVehicle.vehicle.altitudeAMSL.rawValue)
+        if (isNaN(value) || !isFinite(value)) return
+        var samples = nativeAmslSamples.slice(0)
+        samples.push(value)
+        while (samples.length > 10) samples.shift()
+        nativeAmslSamples = samples
+        if (samples.length < 6) {
+            nativePlanAmslStable = false
+            nativePlanAltitudeStatus = "Sampling launch AMSL (" + samples.length + "/6)"
+            return
+        }
+        var sorted = samples.slice(0).sort(function(a, b) { return a - b })
+        var spread = sorted[sorted.length - 1] - sorted[0]
+        if (spread > 0.5) {
+            nativePlanAmslStable = false
+            nativePlanAltitudeStatus = "Native plan blocked: AMSL unstable (" + spread.toFixed(2) + " m)"
+            return
+        }
+        var upperIndex = Math.floor(sorted.length / 2)
+        var lowerIndex = sorted.length % 2 ? upperIndex : upperIndex - 1
+        nativePlanLaunchAmsl = (sorted[lowerIndex] + sorted[upperIndex]) / 2.0
+        nativePlanAmslStable = true
+        nativePlanAltitudeStatus = "Native AMSL locked: " + nativePlanLaunchAmsl.toFixed(2) + " m"
+    }
+
+    Timer {
+        interval: 500
+        running: true
+        repeat: true
+        onTriggered: root.sampleNativeLaunchAmsl()
+    }
+
+    Connections {
+        target: _activeVehicle
+        function onArmedChanged() {
+            if (!_activeVehicle || _activeVehicle.armed) return
+            root.nativeAmslSamples = []
+            root.nativePlanLaunchAmsl = NaN
+            root.nativePlanAmslStable = false
+            root.nativePlanAltitudeStatus = "Waiting for stable launch AMSL"
+        }
+    }
 
 
     // Territory status driven by territory_status messages from the geofence monitor.
@@ -713,17 +773,51 @@ Item {
         return ":/Custom/qml/plans/" + selectedSurveyPlanFile()
     }
 
+    function convertControllerMissionToFixedAmsl(masterController) {
+        if (!masterController || !masterController.missionController || !nativePlanAmslStable) return false
+        var items = masterController.missionController.visualItems
+        if (!items) return false
+        var converted = 0
+        for (var i = 0; i < items.count; i++) {
+            var item = items.get(i)
+            if (!item || !item.isSimpleItem || (item.command !== 16 && item.command !== 22)) continue
+            // The generated plan is relative at rest. Convert each altitude-bearing
+            // native item to MAV_FRAME_GLOBAL with a fixed launch AMSL target.
+            if (item.altitudeMode === QGroundControl.AltitudeModeRelative) {
+                var relativeAltitude = Number(item.altitude.rawValue)
+                item.altitudeMode = QGroundControl.AltitudeModeAbsolute
+                item.altitude.rawValue = nativePlanLaunchAmsl + relativeAltitude
+                converted++
+            }
+        }
+        return converted > 0
+    }
+
     function displaySelectedSurveyPlan() {
+        if (!nativePlanAmslStable) {
+            nativePlanAltitudeStatus = "Native plan not staged: wait for stable launch AMSL"
+            missionStatusText = nativePlanAltitudeStatus
+            console.warn(nativePlanAltitudeStatus)
+            return false
+        }
         var path = selectedSurveyPlanResourcePath()
+        var converted = false
         if (_planMasterController) {
-            console.log("Loading C&E survey plan:", path)
+            console.log("Loading C&E survey plan at fixed AMSL:", path)
             _planMasterController.loadFromFile(path)
+            converted = root.convertControllerMissionToFixedAmsl(_planMasterController) || converted
         }
         if (_planViewMasterController) {
-            // Also stage it in the actual Plan View editor so it's there when the
-            // operator switches to the Plan tab, not just overlaid on the map.
+            // Also stage it in the actual Plan View editor so native PX4 Mission
+            // execution uses the same fixed AMSL targets.
             _planViewMasterController.loadFromFile(path)
+            converted = root.convertControllerMissionToFixedAmsl(_planViewMasterController) || converted
         }
+        nativePlanAltitudeStatus = converted
+                ? "Native plan fixed at launch AMSL " + nativePlanLaunchAmsl.toFixed(2) + " m"
+                : "Native plan conversion failed"
+        if (!converted) missionStatusText = nativePlanAltitudeStatus
+        return converted
     }
 
     // Clears mission waypoints only -- NOT the geofence or rally points -- so
@@ -1130,6 +1224,11 @@ Item {
         }
         var px4Reason = ""
         var px4Status = status.px4_control_status || {}
+        altitudeReferenceStatus = px4Status.altitude_reference || ({})
+        if (altitudeReferenceStatus.native_home_shift_abort_latched === true
+                && altitudeReferenceStatus.native_home_shift_abort_reason) {
+            missionStatusText = altitudeReferenceStatus.native_home_shift_abort_reason
+        }
         homeLockStatus = px4Status.home_status || homeLockStatus
         homeLockReason = px4Status.home_reason || ""
         homeGroundContact = px4Status.ground_contact === true
@@ -2790,17 +2889,44 @@ Item {
             }
 
             Rectangle {
-                width: 236; height: 60; color: _clrCard; radius: 6
+                width: 236; height: 130; color: _clrCard; radius: 6
                 Row {
                     anchors.fill: parent; anchors.margins: 10; spacing: 8
-                    Text { text: "▲"; color: _clrMuted; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "▲"; color: _clrMuted; font.pixelSize: 14 }
                     Column {
-                        anchors.verticalCenter: parent.verticalCenter; spacing: 2
-                        Text { text: "ALTITUDE"; color: _clrMuted; font.pixelSize: 10 }
-                        Row {
-                            spacing: 6
-                            Text { text: root._telAltitude + " " + root._unitAltitude; color: "white"; font.pixelSize: 18; font.bold: true }
-                            Text { text: "AGL"; color: _clrGreen; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                        spacing: 3
+                        Text { text: "ALTITUDE REFERENCES"; color: _clrMuted; font.pixelSize: 10 }
+                        Text {
+                            text: "LAUNCH  " + root.altitudeText(root.altitudeReferenceStatus.current_launch_relative_m)
+                            color: "white"; font.pixelSize: 14; font.bold: true
+                        }
+                        Text {
+                            text: "PX4 HOME  " + root.altitudeText(
+                                      root.altitudeReferenceStatus.current_px4_home_relative_m !== undefined
+                                      ? root.altitudeReferenceStatus.current_px4_home_relative_m : root._telAltitude)
+                                  + (root.altitudeReferenceStatus.home_altitude_shift_m !== undefined
+                                     && root.altitudeReferenceStatus.home_altitude_shift_m !== null
+                                     ? "  Δ" + Number(root.altitudeReferenceStatus.home_altitude_shift_m).toFixed(2) : "")
+                            color: root.altitudeReferenceStatus.native_home_shift_abort_latched === true ? _clrRed : _clrMuted
+                            font.pixelSize: 11
+                        }
+                        Text {
+                            text: "AMSL  " + root.altitudeText(
+                                      root.altitudeReferenceStatus.current_amsl_m !== undefined
+                                      ? root.altitudeReferenceStatus.current_amsl_m : root._telAltitudeAmsl)
+                            color: _clrMuted; font.pixelSize: 11
+                        }
+                        Text {
+                            text: "CMD  " + root.altitudeText(root.altitudeReferenceStatus.commanded_altitude_m)
+                                  + (root.altitudeReferenceStatus.commanded_reference ? " " + root.altitudeReferenceStatus.commanded_reference : "")
+                            color: _clrGreen; font.pixelSize: 11
+                        }
+                        Text {
+                            width: 190
+                            text: root.nativePlanAltitudeStatus
+                            color: root.nativePlanAmslStable ? _clrGreen : _clrAmber
+                            font.pixelSize: 9
+                            elide: Text.ElideRight
                         }
                     }
                 }

@@ -142,6 +142,10 @@ Vehicle::Vehicle(LinkInterface*             link,
 
     _commonInit();
 
+    connect(this, &Vehicle::initialConnectComplete, this, [this](){
+        _setmessageInterval(MAVLINK_MSG_ID_DISTANCE_SENSOR, 1000000); // 1Hz
+    }
+
     _vehicleLinkManager->_addLink(link);
 
     // Set video stream to udp if running ArduSub and Video is disabled
